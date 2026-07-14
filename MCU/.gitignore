@@ -1,0 +1,18 @@
+# Ambiente Arduino IDE
+build/
+*.elf
+*.bin
+*.hex
+*.map
+
+# Cache e configurazioni locali Arduino
+.arduino*/
+*.json
+
+# Ambiente PlatformIO (se utilizzato in futuro)
+.pio/
+.vscode/
+
+# File di sistema operativo
+.DS_Store
+Thumbs.db

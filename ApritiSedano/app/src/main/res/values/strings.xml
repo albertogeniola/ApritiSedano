@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">ApritiSedano</string>
+    <string name="open_box_label">Apri il box</string>
+    <string name="notification_channel_name">Apriti Sedano Service</string>
+    <string name="notification_title">Apertura in corso...</string>
+    <string name="notification_text">Il sistema sta comunicando con la basculante.</string>
+    <string name="success_message">Aperto con successo!</string>
+    <string name="failure_message">Errore di comunicazione.</string>
+</resources>

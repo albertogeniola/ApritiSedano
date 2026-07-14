@@ -1,0 +1,20 @@
+# File IDE Android Studio e IntelliJ
+*.iml
+.gradle
+/.idea/
+/local.properties
+
+# Cache e Build
+/build/
+app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# File macOS / Windows
+.DS_Store
+Thumbs.db
+
+# Keystore (Opzionale: sblocca se vuoi versionare la chiave di debug)
+*.jks
+*.keystore

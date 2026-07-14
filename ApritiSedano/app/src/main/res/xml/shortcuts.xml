@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <capability android:name="actions.intent.OPEN_APP_FEATURE">
+        <intent
+            android:action="it.geniola.apritisedano.ACTION_OPEN_BOX"
+            android:targetPackage="it.geniola.apritisedano"
+            android:targetClass="it.geniola.apritisedano.MainActivity">
+            <parameter
+                android:name="feature"
+                android:key="feature"/>
+        </intent>
+    </capability>
+
+    <!-- Shortcut definition for "Ok Google, apri il box" -->
+    <shortcut
+        android:shortcutId="open_box"
+        android:shortcutShortLabel="@string/open_box_label">
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE">
+            <parameter android:key="feature" android:value="box" />
+        </capability-binding>
+    </shortcut>
+</shortcuts>
