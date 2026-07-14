@@ -69,40 +69,64 @@ public class ApritiSedanoCarScreen extends Screen implements DefaultLifecycleObs
     public Template onGetTemplate() {
         Pane.Builder paneBuilder = new Pane.Builder();
         
-        if (isOperating) {
-            paneBuilder.setLoading(true);
-        } else {
-            // Icona del garage (che abbiamo creato)
-            androidx.core.graphics.drawable.IconCompat iconCompat = androidx.core.graphics.drawable.IconCompat.createWithResource(getCarContext(), R.drawable.ic_magic_box);
-            androidx.car.app.model.CarIcon carIcon = new androidx.car.app.model.CarIcon.Builder(iconCompat).setTint(CarColor.DEFAULT).build();
+        // Icona del garage (che abbiamo creato)
+        androidx.core.graphics.drawable.IconCompat iconCompat = androidx.core.graphics.drawable.IconCompat.createWithResource(getCarContext(), R.drawable.ic_magic_box);
+        androidx.car.app.model.CarIcon carIcon = new androidx.car.app.model.CarIcon.Builder(iconCompat).setTint(CarColor.DEFAULT).build();
 
-            Action openAction = new Action.Builder()
-                .setTitle("APRI SEDANO")
-                .setBackgroundColor(CarColor.BLUE)
-                .setOnClickListener(() -> {
-                    isOperating = true;
-                    invalidate(); // Aggiorna la UI per mostrare il caricamento
-                    
-                    Intent serviceIntent = new Intent(getCarContext(), ApritiSedanoService.class);
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        getCarContext().startForegroundService(serviceIntent);
-                    } else {
-                        getCarContext().startService(serviceIntent);
-                    }
-                })
-                .build();
-            
-            paneBuilder.addAction(openAction);
-            
-            Row row = new Row.Builder()
-                .setTitle("ApritiSedano è Pronto")
-                .addText("Premi il pulsante per aprire o chiudere il portone del tuo garage.")
-                .setImage(carIcon, Row.IMAGE_TYPE_LARGE)
-                .build();
+        Action.Builder openActionBuilder = new Action.Builder()
+            .setTitle(isOperating ? "IN ATTESA..." : "APRI SEDANO")
+            .setBackgroundColor(isOperating ? CarColor.DEFAULT : CarColor.BLUE);
+
+        if (!isOperating) {
+            openActionBuilder.setOnClickListener(() -> {
+                isOperating = true;
+                invalidate(); // Aggiorna la UI per mostrare i nuovi pulsanti
                 
-            paneBuilder.addRow(row);
-            paneBuilder.setImage(carIcon);
+                Intent serviceIntent = new Intent(getCarContext(), ApritiSedanoService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    getCarContext().startForegroundService(serviceIntent);
+                } else {
+                    getCarContext().startService(serviceIntent);
+                }
+            });
         }
+        
+        paneBuilder.addAction(openActionBuilder.build());
+
+        Action.Builder cancelActionBuilder = new Action.Builder()
+            .setTitle("TERMINA INVIO")
+            .setBackgroundColor(isOperating ? CarColor.RED : CarColor.DEFAULT);
+            
+        // Tentiamo di usare l'API nativa per disabilitare, ma gestiamo la logica anche nel listener
+        // per compatibilità con versioni vecchie di Android Auto.
+        cancelActionBuilder.setOnClickListener(() -> {
+            if (isOperating) {
+                // Interrompi il servizio
+                Intent serviceIntent = new Intent(getCarContext(), ApritiSedanoService.class);
+                getCarContext().stopService(serviceIntent);
+                
+                isOperating = false;
+                invalidate(); // Ripristina la UI
+            }
+        });
+        
+        // Se la libreria lo supporta (Car API 5+), la disabilitazione visiva avverrà tramite questa chiamata:
+        try {
+            cancelActionBuilder.setEnabled(isOperating);
+        } catch (NoSuchMethodError e) {
+            // Ignora se eseguito su una versione molto vecchia della libreria in esecuzione
+        }
+
+        paneBuilder.addAction(cancelActionBuilder.build());
+        
+        Row row = new Row.Builder()
+            .setTitle("ApritiSedano è Pronto")
+            .addText(isOperating ? "Trasmissione e attesa segnale in corso..." : "Premi il pulsante per aprire o chiudere il portone del tuo garage.")
+            .setImage(carIcon, Row.IMAGE_TYPE_LARGE)
+            .build();
+            
+        paneBuilder.addRow(row);
+        paneBuilder.setImage(carIcon);
         
         return new PaneTemplate.Builder(paneBuilder.build())
             .setTitle("ApritiSedano")
