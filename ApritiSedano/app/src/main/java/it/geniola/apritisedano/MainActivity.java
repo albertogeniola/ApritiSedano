@@ -46,6 +46,17 @@ import android.content.DialogInterface;
 import android.view.Menu;
 import android.view.MenuItem;
 import java.nio.charset.StandardCharsets;
+import com.journeyapps.barcodescanner.ScanContract;
+import com.journeyapps.barcodescanner.ScanOptions;
+import com.journeyapps.barcodescanner.BarcodeEncoder;
+import com.google.zxing.BarcodeFormat;
+import androidx.activity.result.ActivityResultLauncher;
+import android.net.Uri;
+import androidx.core.content.FileProvider;
+import java.io.File;
+import java.io.FileOutputStream;
+import android.graphics.Bitmap;
+import android.widget.ImageView;
 
 /**
  * Activity principale per la configurazione e il trigger NFC.
@@ -66,6 +77,24 @@ public class MainActivity extends AppCompatActivity {
     private static final UUID TARGET_SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0");
     private boolean isNfcWriteMode = false;
     private AlertDialog nfcWriteDialog = null;
+
+    private final ActivityResultLauncher<ScanOptions> barcodeLauncher = registerForActivityResult(new ScanContract(),
+            result -> {
+                if (result.getContents() != null) {
+                    String scanned = result.getContents();
+                    if (scanned.startsWith("otpauth://")) {
+                        Uri uri = Uri.parse(scanned);
+                        String secret = uri.getQueryParameter("secret");
+                        if (secret != null) {
+                            scanned = secret;
+                        }
+                    }
+                    SecretStore.setSecretKey(MainActivity.this, scanned);
+                    Toast.makeText(MainActivity.this, "Chiave importata con successo!", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(MainActivity.this, "Scansione annullata", Toast.LENGTH_SHORT).show();
+                }
+            });
 
     private final BroadcastReceiver serviceReceiver = new BroadcastReceiver() {
         @Override
@@ -543,12 +572,32 @@ public class MainActivity extends AppCompatActivity {
     private void showSecretKeyDialog() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Imposta Chiave Segreta");
-        builder.setMessage("Inserisci la chiave segreta (Base32) usata dal dispositivo:");
 
-        final EditText input = new EditText(this);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        View dialogView = getLayoutInflater().inflate(R.layout.dialog_secret_key, null);
+        builder.setView(dialogView);
+
+        final EditText input = dialogView.findViewById(R.id.et_secret_key);
         input.setText(SecretStore.getSecretKey(this));
-        builder.setView(input);
+
+        Button btnScanQr = dialogView.findViewById(R.id.btn_scan_qr);
+        Button btnShowQr = dialogView.findViewById(R.id.btn_show_qr);
+
+        btnScanQr.setOnClickListener(v -> {
+            ScanOptions options = new ScanOptions();
+            options.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
+            options.setPrompt("Inquadra il QR Code con la chiave");
+            options.setBeepEnabled(false);
+            barcodeLauncher.launch(options);
+        });
+
+        btnShowQr.setOnClickListener(v -> {
+            String currentKey = input.getText().toString().trim();
+            if (!currentKey.isEmpty()) {
+                showQrDialog(currentKey);
+            } else {
+                Toast.makeText(this, "Inserisci prima una chiave", Toast.LENGTH_SHORT).show();
+            }
+        });
 
         builder.setPositiveButton("Salva", (dialog, which) -> {
             String newKey = input.getText().toString().trim();
@@ -556,8 +605,55 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(MainActivity.this, "Chiave salvata", Toast.LENGTH_SHORT).show();
         });
         builder.setNegativeButton("Annulla", (dialog, which) -> dialog.cancel());
-        builder.setCancelable(false); // Force the user to input the key if it's the first time
+        builder.setCancelable(false);
         builder.show();
+    }
+
+    private void showQrDialog(String key) {
+        try {
+            BarcodeEncoder barcodeEncoder = new BarcodeEncoder();
+            String uriContent = "otpauth://totp/ApritiSedano?secret=" + key + "&issuer=ApritiSedano";
+            Bitmap bitmap = barcodeEncoder.encodeBitmap(uriContent, BarcodeFormat.QR_CODE, 600, 600);
+
+            AlertDialog.Builder builder = new AlertDialog.Builder(this);
+            builder.setTitle("QR Code Chiave");
+
+            ImageView imageView = new ImageView(this);
+            imageView.setImageBitmap(bitmap);
+            imageView.setPadding(32, 32, 32, 32);
+            builder.setView(imageView);
+
+            builder.setPositiveButton("Condividi", (dialog, which) -> {
+                shareQrCode(bitmap);
+            });
+            builder.setNegativeButton("Chiudi", (dialog, which) -> dialog.dismiss());
+            builder.show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Errore nella generazione del QR", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void shareQrCode(Bitmap bitmap) {
+        try {
+            File cachePath = new File(getCacheDir(), "shared_qr");
+            cachePath.mkdirs();
+            File file = new File(cachePath, "qr_code.png");
+            FileOutputStream stream = new FileOutputStream(file);
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream);
+            stream.close();
+
+            Uri contentUri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
+
+            if (contentUri != null) {
+                Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                shareIntent.setDataAndType(contentUri, getContentResolver().getType(contentUri));
+                shareIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+                startActivity(Intent.createChooser(shareIntent, "Condividi QR Code"));
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Errore durante la condivisione", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void startNfcConfig() {
