@@ -1,10 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
+    <!-- Colori a tema "Sedano" (Celery Green) -->
+    <color name="sedano_primary">#7CB342</color>
+    <color name="sedano_primary_dark">#558B2F</color>
+    <color name="sedano_accent">#FFA000</color>
+
+    <!-- Colori per la UI (Light) -->
+    <color name="bg_light">#F8F9FA</color>
+    <color name="surface_light">#FFFFFF</color>
+    <color name="text_primary_light">#202124</color>
+
+    <!-- Colori per la UI (Dark) -->
+    <color name="bg_dark">#121212</color>
+    <color name="surface_dark">#1E1E1E</color>
+    <color name="text_primary_dark">#E8EAED</color>
+
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 </resources>

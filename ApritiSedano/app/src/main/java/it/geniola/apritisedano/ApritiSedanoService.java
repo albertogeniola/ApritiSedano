@@ -105,6 +105,7 @@ public class ApritiSedanoService extends Service {
             String secretKey = SecretStore.getSecretKey(this);
             byte[] syncPayload = TOTPGenerator.generateTimeSyncPayload(secretKey, ts);
             Log.d(TAG, "Avvio Advertising con Time Sync Payload");
+            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), true, "", "Sincronizzazione Ora (TX)"));
             data = new AdvertiseData.Builder()
                     .addServiceUuid(new ParcelUuid(TARGET_SERVICE_UUID))
                     .addManufacturerData(0x02E5, syncPayload)
@@ -113,6 +114,7 @@ public class ApritiSedanoService extends Service {
             String secretKey = SecretStore.getSecretKey(this);
             String totp = TOTPGenerator.generateTOTP(secretKey);
             Log.d(TAG, "Avvio Advertising con TOTP: " + totp);
+            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), true, totp, ""));
             data = new AdvertiseData.Builder()
                     .addServiceUuid(new ParcelUuid(TARGET_SERVICE_UUID))
                     .addManufacturerData(0x02E5, totp.getBytes(StandardCharsets.UTF_8))
@@ -173,16 +175,22 @@ public class ApritiSedanoService extends Service {
                     
                     if (response.contains("ACK_OK_OPEN")) {
                         Log.d(TAG, "Ricevuto ACK DAL BOX: APERTO");
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_OK_OPEN (Stato: APERTO)"));
                         notifyCompletion(BoxState.OPEN);
                         stopSelf();
                     } else if (response.contains("ACK_OK_CLOSED")) {
                         Log.d(TAG, "Ricevuto ACK DAL BOX: CHIUSO");
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_OK_CLOSED (Stato: CHIUSO)"));
                         notifyCompletion(BoxState.CLOSED);
                         stopSelf();
                     } else if (response.contains("NACK_TIME_ERR")) {
                         Log.d(TAG, "Ricevuto NACK DAL BOX: TIME_INVALID");
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "NACK_TIME_ERR (Orologio non allineato)"));
                         notifyCompletion(BoxState.UNKNOWN);
                         stopSelf();
+                    } else {
+                        // Other packets or partial payloads (e.g. while BLE is sending)
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Dato Sconosciuto/Parziale: " + response));
                     }
                 }
             }

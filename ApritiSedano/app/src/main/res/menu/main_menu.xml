@@ -9,4 +9,8 @@
         android:id="@+id/action_set_secret"
         android:title="Imposta Chiave Segreta"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/action_debug_mode"
+        android:title="Log di Debug BLE"
+        app:showAsAction="never" />
 </menu>

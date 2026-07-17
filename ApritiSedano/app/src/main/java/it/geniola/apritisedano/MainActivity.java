@@ -526,6 +526,9 @@ public class MainActivity extends AppCompatActivity {
         } else if (item.getItemId() == R.id.action_set_secret) {
             showSecretKeyDialog();
             return true;
+        } else if (item.getItemId() == R.id.action_debug_mode) {
+            startActivity(new Intent(this, DebugActivity.class));
+            return true;
         }
         return super.onOptionsItemSelected(item);
     }

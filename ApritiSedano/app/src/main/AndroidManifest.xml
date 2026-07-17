@@ -64,6 +64,8 @@
             </intent-filter>
         </activity-alias>
 
+        <activity android:name=".DebugActivity" android:exported="false" android:label="Debug BLE" />
+
         <service
             android:name=".ApritiSedanoService"
             android:enabled="true"
