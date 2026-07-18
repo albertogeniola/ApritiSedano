@@ -5,8 +5,8 @@
 // Rimuovi il commento (//) SOLO sulla scheda che stai per programmare.
 // ==========================================
 
-#define BOARD_XIAO_ESP32C6
-//#define BOARD_ESP32_WROOM32
+//#define BOARD_XIAO_ESP32C6
+#define BOARD_ESP32_WROOM32
 
 // ==========================================
 // CONFIGURAZIONE PIN AUTOMATICA
