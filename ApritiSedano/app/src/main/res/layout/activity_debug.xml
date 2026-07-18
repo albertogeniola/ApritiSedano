@@ -58,6 +58,34 @@
 
     </LinearLayout>
 
+    <!-- Filters -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:gravity="center"
+        android:background="#eeeeee">
+        
+        <CheckBox
+            android:id="@+id/cb_filter_beacons"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Beacons"
+            android:textColor="#333333"
+            android:checked="true"
+            android:layout_marginEnd="16dp"/>
+
+        <CheckBox
+            android:id="@+id/cb_filter_commands"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Comandi (TX/ACK)"
+            android:textColor="#333333"
+            android:checked="true" />
+            
+    </LinearLayout>
+
     <!-- Logs List (takes remaining space) -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_debug_logs"

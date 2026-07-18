@@ -50,6 +50,8 @@ public class DebugActivity extends AppCompatActivity {
     private long lastReceivedTimestamp = 0;
     private int currentBoxState = -1;
     private static final UUID TARGET_SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0");
+    private android.widget.CheckBox cbFilterBeacons;
+    private android.widget.CheckBox cbFilterCommands;
 
     private final BroadcastReceiver serviceReceiver = new BroadcastReceiver() {
         @Override
@@ -84,13 +86,19 @@ public class DebugActivity extends AppCompatActivity {
                         System.arraycopy(payload, 6, hmac, 0, 4);
 
                         long currentTs = System.currentTimeMillis() / 1000L;
-                        if (Math.abs(currentTs - ts) > 300) return;
-                        if (ts <= lastReceivedTimestamp) return;
+                        if (Math.abs(currentTs - ts) > 300) {
+                            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon Scartato (Deriva > 5m)"));
+                            runOnUiThread(() -> updateList());
+                            return;
+                        }
+                        if (ts <= lastReceivedTimestamp) return; // Ignore replays to avoid spam
 
                         if (TOTPGenerator.verifyStateBeacon(SecretStore.getSecretKey(DebugActivity.this), state, (int)ts, hmac)) {
                             lastReceivedTimestamp = ts;
                             currentBoxState = state;
+                            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX: " + (state == 1 ? "APERTO" : "CHIUSO") + " (ts: " + ts + ")"));
                             runOnUiThread(() -> {
+                                updateList();
                                 if (state == 1) {
                                     tvBoxState.setText("Stato: APERTO");
                                     tvBoxState.setTextColor(Color.parseColor("#4CAF50"));
@@ -105,12 +113,16 @@ public class DebugActivity extends AppCompatActivity {
                             });
                         }
                     } else if (payload[0] == 0x02) {
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX: Orologio Scarico"));
                         runOnUiThread(() -> {
+                            updateList();
                             tvBoxState.setText("Stato: Orologio Scarico");
                             tvBoxState.setTextColor(Color.parseColor("#FF9800"));
                         });
                     } else if (payload[0] == 0x03) {
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX: Sincronizzazione in corso"));
                         runOnUiThread(() -> {
+                            updateList();
                             tvBoxState.setText("Stato: Sincronizzazione...");
                             tvBoxState.setTextColor(Color.parseColor("#2196F3"));
                         });
@@ -130,6 +142,12 @@ public class DebugActivity extends AppCompatActivity {
 
         rvLogs = findViewById(R.id.rv_debug_logs);
         rvLogs.setLayoutManager(new LinearLayoutManager(this));
+
+        cbFilterBeacons = findViewById(R.id.cb_filter_beacons);
+        cbFilterCommands = findViewById(R.id.cb_filter_commands);
+        android.widget.CompoundButton.OnCheckedChangeListener filterListener = (btn, isChecked) -> updateList();
+        if (cbFilterBeacons != null) cbFilterBeacons.setOnCheckedChangeListener(filterListener);
+        if (cbFilterCommands != null) cbFilterCommands.setOnCheckedChangeListener(filterListener);
 
         findViewById(R.id.btn_clear_logs).setOnClickListener(v -> {
             DebugLogger.getInstance().clearLogs();
@@ -172,20 +190,37 @@ public class DebugActivity extends AppCompatActivity {
         // Listen for new logs
         DebugLogger.getInstance().setListener(entry -> {
             mainHandler.post(() -> {
-                logsList.add(0, entry);
-                if (logsList.size() > 100) {
-                    logsList.remove(logsList.size() - 1);
+                boolean showBeacons = cbFilterBeacons != null && cbFilterBeacons.isChecked();
+                boolean showCommands = cbFilterCommands != null && cbFilterCommands.isChecked();
+                boolean isBeacon = entry.getMessage() != null && entry.getMessage().startsWith("Beacon");
+                
+                if ((isBeacon && showBeacons) || (!isBeacon && showCommands)) {
+                    logsList.add(0, entry);
+                    if (logsList.size() > 100) {
+                        logsList.remove(logsList.size() - 1);
+                    }
+                    adapter.notifyDataSetChanged();
+                    rvLogs.scrollToPosition(0);
                 }
-                adapter.notifyDataSetChanged();
-                rvLogs.scrollToPosition(0);
             });
         });
     }
 
     private void updateList() {
         logsList.clear();
-        logsList.addAll(DebugLogger.getInstance().getLogs());
-        adapter.notifyDataSetChanged();
+        boolean showBeacons = cbFilterBeacons != null && cbFilterBeacons.isChecked();
+        boolean showCommands = cbFilterCommands != null && cbFilterCommands.isChecked();
+        
+        for (DebugLogEntry entry : DebugLogger.getInstance().getLogs()) {
+            boolean isBeacon = entry.getMessage() != null && entry.getMessage().startsWith("Beacon");
+            if ((isBeacon && showBeacons) || (!isBeacon && showCommands)) {
+                logsList.add(entry);
+            }
+        }
+        
+        if (adapter != null) {
+            adapter.notifyDataSetChanged();
+        }
     }
 
     @Override

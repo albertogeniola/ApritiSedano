@@ -20,6 +20,10 @@ unsigned long BleHandler::_lastValidTime = 0;
 bool BleHandler::_isTimeInvalid = false;
 bool BleHandler::_isTimeSyncMode = false;
 unsigned long BleHandler::_timeSyncEndTime = 0;
+volatile bool BleHandler::_buttonPressedFlag = false;
+volatile bool BleHandler::_needsUpdateStateBeacon = false;
+volatile bool BleHandler::_needsStartAdvertisingACK = false;
+volatile bool BleHandler::_needsStartAdvertisingNACK = false;
 
 bool BleHandler::_isAckActive = false;
 unsigned long BleHandler::_ackEndTime = 0;
@@ -46,8 +50,8 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                 if (idLow == 0xE5 && idHigh == 0x02) {
                     if (mData.length() >= 11 && (uint8_t)mData[2] == 0xFF) {
                         Serial.println("---- TIME SYNC PAYLOAD RICEVUTO ----");
-                        if (!BleHandler::_isTimeSyncMode) {
-                            Serial.println("Rifiutato: Sistema non in TIME_SYNC_MODE.");
+                        if (!BleHandler::_isTimeSyncMode && !BleHandler::_isTimeInvalid) {
+                            Serial.println("Rifiutato: Sistema non in TIME_SYNC_MODE né in stato INVALID.");
                             return;
                         }
                         
@@ -69,7 +73,7 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                             BleHandler::_isTimeInvalid = false;
                             BleHandler::_isTimeSyncMode = false;
                             BuzzerManager::playSuccessSequence();
-                            BleHandler::updateStateBeacon();
+                            BleHandler::_needsUpdateStateBeacon = true;
                         } else {
                             Serial.println("Firma Time Sync non valida.");
                             BuzzerManager::playErrorSequence();
@@ -79,7 +83,7 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                         if (BleHandler::_isTimeInvalid && !BleHandler::_isTimeSyncMode) {
                             Serial.println("ERRORE: Orario non valido (RTC scarico). Operazione bloccata.");
                             BuzzerManager::playErrorSequence();
-                            BleHandler::startAdvertisingNACK();
+                            BleHandler::_needsStartAdvertisingNACK = true;
                             return;
                         }
                         
@@ -94,7 +98,7 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                             // Check idempotency (ignore if same code within 60 seconds)
                             if (totpCode == BleHandler::_lastValidCode && (nowMs - BleHandler::_lastValidTime < 60000)) {
                                 Serial.println("Valid TOTP received, but it's a duplicate. Resetting ACK timer.");
-                                BleHandler::startAdvertisingACK();
+                                BleHandler::_needsStartAdvertisingACK = true;
                                 return;
                             }
 
@@ -113,7 +117,7 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                             }
 
                             BleHandler::triggerRelay();
-                            BleHandler::startAdvertisingACK();
+                            BleHandler::_needsStartAdvertisingACK = true;
                         } else {
                             LedIndicator::setState(LED_ERROR); // Segnale Visivo LED errore
                             Serial.println("ERRORE: Validazione TOTP fallita per questo pacchetto.");
@@ -192,13 +196,8 @@ void BleHandler::init(int relayPin, int sensorPin) {
     pBLEScan->start(0, nullptr, false); // 0 = continuous scan
 }
 
-void BleHandler::handleButtonPress() {
-    if (_isTimeInvalid && !_isTimeSyncMode) {
-        _isTimeSyncMode = true;
-        _timeSyncEndTime = millis() + 300000; // 5 minuti
-        Serial.println("Pulsante premuto. Entro in modalità sincronizzazione orario per 5 minuti.");
-        updateStateBeacon();
-    }
+void IRAM_ATTR BleHandler::handleButtonPress() {
+    _buttonPressedFlag = true;
 }
 
 void BleHandler::triggerRelay() {
@@ -312,6 +311,29 @@ void BleHandler::updateStateBeacon() {
 
 void BleHandler::loop() {
     if (_isPaused) return;
+
+    if (_buttonPressedFlag) {
+        _buttonPressedFlag = false;
+        if (_isTimeInvalid && !_isTimeSyncMode) {
+            _isTimeSyncMode = true;
+            _timeSyncEndTime = millis() + 300000; // 5 minuti
+            Serial.println("Pulsante premuto. Entro in modalità sincronizzazione orario per 5 minuti.");
+            _needsUpdateStateBeacon = true;
+        }
+    }
+
+    if (_needsUpdateStateBeacon) {
+        _needsUpdateStateBeacon = false;
+        updateStateBeacon();
+    }
+    if (_needsStartAdvertisingACK) {
+        _needsStartAdvertisingACK = false;
+        startAdvertisingACK();
+    }
+    if (_needsStartAdvertisingNACK) {
+        _needsStartAdvertisingNACK = false;
+        startAdvertisingNACK();
+    }
 
     if (_isTimeSyncMode && millis() > _timeSyncEndTime) {
         _isTimeSyncMode = false;

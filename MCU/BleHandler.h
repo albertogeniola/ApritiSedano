@@ -29,6 +29,10 @@ private:
     static bool _isTimeInvalid;
     static bool _isTimeSyncMode;
     static unsigned long _timeSyncEndTime;
+    static volatile bool _buttonPressedFlag;
+    static volatile bool _needsUpdateStateBeacon;
+    static volatile bool _needsStartAdvertisingACK;
+    static volatile bool _needsStartAdvertisingNACK;
 
     static bool _isAckActive;
     static unsigned long _ackEndTime;
