@@ -133,12 +133,8 @@ void BleHandler::init(int relayPin, int sensorPin) {
     _relayPin = relayPin;
     _sensorPin = sensorPin;
 
-    // Configura il pin come Open-Drain. Questo è vitale per i relè a 5V Active-LOW.
-    // In questo modo un HIGH non eroga 3.3V (che terrebbe il relè semi-acceso), ma lo "scollega" (High-Z).
-    // Usando un transistor NPN per disaccoppiare, la logica diventa Active-HIGH.
-    // Il pin è un normale OUTPUT. LOW spegne il transistor (e il relè a riposo), HIGH lo accende (e fa scattare il relè).
     pinMode(_relayPin, OUTPUT);
-    digitalWrite(_relayPin, LOW); // LOW a riposo
+    digitalWrite(_relayPin, LOW);
     
     pinMode(_sensorPin, INPUT_PULLUP);
     _lastSensorState = digitalRead(_sensorPin);

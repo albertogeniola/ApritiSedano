@@ -1,17 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fitsSystemWindows="true"
-    android:orientation="vertical">
+    android:orientation="vertical"
+    android:background="#FFFFFF">
 
+    <!-- Top Bar -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:padding="16dp"
         android:background="?attr/colorPrimary"
-        android:elevation="4dp">
+        android:elevation="4dp"
+        android:gravity="center_vertical">
 
         <TextView
             android:layout_width="0dp"
@@ -33,11 +37,70 @@
             android:paddingHorizontal="8dp"/>
     </LinearLayout>
 
+    <!-- State Info -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:gravity="center"
+        android:background="#f5f5f5"
+        android:elevation="2dp">
+
+        <TextView
+            android:id="@+id/tv_debug_box_state"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Stato: IN ATTESA..."
+            android:textColor="#333333"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+
+    <!-- Logs List (takes remaining space) -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_debug_logs"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:padding="8dp"
         android:clipToPadding="false"/>
+
+    <!-- Bottom Action Button -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:clipToPadding="false"
+        android:background="#FFFFFF"
+        android:elevation="8dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_debug_action_toggle"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="8dp"
+            app:cornerRadius="8dp"
+            android:text="APRI/CHIUDI"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:enabled="true" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_debug_action_stop"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            app:cornerRadius="8dp"
+            android:text="INTERROMPI"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:enabled="false"
+            app:backgroundTint="@color/sedano_accent" />
+    </LinearLayout>
 
 </LinearLayout>

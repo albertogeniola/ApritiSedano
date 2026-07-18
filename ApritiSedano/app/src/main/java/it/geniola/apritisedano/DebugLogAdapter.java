@@ -18,9 +18,26 @@ public class DebugLogAdapter extends RecyclerView.Adapter<DebugLogAdapter.ViewHo
 
     private final List<DebugLogEntry> logs;
     private final SimpleDateFormat dateFormat = new SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault());
+    private boolean isTransmitting = false;
+    private boolean blinkState = false;
 
     public DebugLogAdapter(List<DebugLogEntry> logs) {
         this.logs = logs;
+    }
+
+    public void setTransmitting(boolean transmitting) {
+        this.isTransmitting = transmitting;
+        if (!transmitting) {
+            blinkState = false;
+        }
+        notifyDataSetChanged();
+    }
+
+    public void toggleBlink() {
+        if (isTransmitting) {
+            this.blinkState = !this.blinkState;
+            notifyDataSetChanged();
+        }
     }
 
     @NonNull
@@ -78,6 +95,24 @@ public class DebugLogAdapter extends RecyclerView.Adapter<DebugLogAdapter.ViewHo
                 }
             }
         }
+
+        // Blinking logic for the MOST RECENT TX entry
+        boolean isLatestTx = false;
+        if (entry.isTx()) {
+            isLatestTx = true;
+            for (int i = 0; i < position; i++) {
+                if (logs.get(i).isTx()) {
+                    isLatestTx = false;
+                    break;
+                }
+            }
+        }
+
+        if (isLatestTx && isTransmitting) {
+            holder.tvBlinkIndicator.setVisibility(blinkState ? View.VISIBLE : View.INVISIBLE);
+        } else {
+            holder.tvBlinkIndicator.setVisibility(View.GONE);
+        }
     }
 
     @Override
@@ -90,6 +125,7 @@ public class DebugLogAdapter extends RecyclerView.Adapter<DebugLogAdapter.ViewHo
         public TextView tvTimestamp;
         public TextView tvValidity;
         public TextView tvContent;
+        public TextView tvBlinkIndicator;
 
         public ViewHolder(View itemView) {
             super(itemView);
@@ -97,6 +133,7 @@ public class DebugLogAdapter extends RecyclerView.Adapter<DebugLogAdapter.ViewHo
             tvTimestamp = itemView.findViewById(R.id.tv_timestamp);
             tvValidity = itemView.findViewById(R.id.tv_validity);
             tvContent = itemView.findViewById(R.id.tv_content);
+            tvBlinkIndicator = itemView.findViewById(R.id.tv_blink_indicator);
         }
     }
 }

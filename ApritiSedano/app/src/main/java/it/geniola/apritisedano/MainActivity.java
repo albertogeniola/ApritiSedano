@@ -77,6 +77,7 @@ public class MainActivity extends AppCompatActivity {
     private static final UUID TARGET_SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0");
     private boolean isNfcWriteMode = false;
     private AlertDialog nfcWriteDialog = null;
+    private EditText currentSecretKeyEditText = null;
 
     private final ActivityResultLauncher<ScanOptions> barcodeLauncher = registerForActivityResult(new ScanContract(),
             result -> {
@@ -89,8 +90,17 @@ public class MainActivity extends AppCompatActivity {
                             scanned = secret;
                         }
                     }
-                    SecretStore.setSecretKey(MainActivity.this, scanned);
-                    Toast.makeText(MainActivity.this, "Chiave importata con successo!", Toast.LENGTH_SHORT).show();
+                    if (TOTPGenerator.isValidBase32Secret(scanned)) {
+                        if (currentSecretKeyEditText != null) {
+                            currentSecretKeyEditText.setText(scanned);
+                            Toast.makeText(MainActivity.this, "QR Scansionato! Clicca Salva per confermare.", Toast.LENGTH_SHORT).show();
+                        } else {
+                            SecretStore.setSecretKey(MainActivity.this, scanned);
+                            Toast.makeText(MainActivity.this, "Chiave importata con successo!", Toast.LENGTH_SHORT).show();
+                        }
+                    } else {
+                        Toast.makeText(MainActivity.this, "La chiave scansionata non è valida (richiesto formato Base32).", Toast.LENGTH_LONG).show();
+                    }
                 } else {
                     Toast.makeText(MainActivity.this, "Scansione annullata", Toast.LENGTH_SHORT).show();
                 }
@@ -577,6 +587,7 @@ public class MainActivity extends AppCompatActivity {
         builder.setView(dialogView);
 
         final EditText input = dialogView.findViewById(R.id.et_secret_key);
+        currentSecretKeyEditText = input;
         input.setText(SecretStore.getSecretKey(this));
 
         Button btnScanQr = dialogView.findViewById(R.id.btn_scan_qr);
@@ -599,14 +610,27 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        builder.setPositiveButton("Salva", (dialog, which) -> {
-            String newKey = input.getText().toString().trim();
-            SecretStore.setSecretKey(MainActivity.this, newKey);
-            Toast.makeText(MainActivity.this, "Chiave salvata", Toast.LENGTH_SHORT).show();
-        });
+        builder.setPositiveButton("Salva", null);
         builder.setNegativeButton("Annulla", (dialog, which) -> dialog.cancel());
         builder.setCancelable(false);
-        builder.show();
+        
+        AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(d -> {
+            Button posBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            posBtn.setOnClickListener(v -> {
+                String newKey = input.getText().toString().trim();
+                if (TOTPGenerator.isValidBase32Secret(newKey)) {
+                    SecretStore.setSecretKey(MainActivity.this, newKey);
+                    Toast.makeText(MainActivity.this, "Chiave salvata", Toast.LENGTH_SHORT).show();
+                    currentSecretKeyEditText = null;
+                    dialog.dismiss();
+                } else {
+                    Toast.makeText(MainActivity.this, "Formato chiave non valido (richiesto Base32).", Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+        dialog.setOnDismissListener(d -> currentSecretKeyEditText = null);
+        dialog.show();
     }
 
     private void showQrDialog(String key) {

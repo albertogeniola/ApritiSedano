@@ -72,8 +72,15 @@ public class ApritiSedanoService extends Service {
         boolean isSyncAction = intent != null && "ACTION_SYNC_TIME".equals(intent.getAction());
         startRadioOperations(isSyncAction);
         
-        // Timeout tassativo di 1 minuto
-        timeoutHandler.postDelayed(this::stopSelf, TIMEOUT_MS);
+        long timeout = TIMEOUT_MS; // Default per sincronizzazione
+        if (!isSyncAction) {
+            long currentTsSeconds = System.currentTimeMillis() / 1000L;
+            long remainingSeconds = 30 - (currentTsSeconds % 30);
+            timeout = (remainingSeconds * 1000L) + 500L; // +500ms di margine
+            Log.d(TAG, "Timeout dinamico impostato a " + timeout + " ms (fine validità TOTP)");
+        }
+        
+        timeoutHandler.postDelayed(this::stopSelf, timeout);
         
         return START_NOT_STICKY;
     }
@@ -101,9 +108,24 @@ public class ApritiSedanoService extends Service {
 
         AdvertiseData data;
         if (isSyncAction) {
-            int ts = (int)(System.currentTimeMillis() / 1000L);
             String secretKey = SecretStore.getSecretKey(this);
+            if (secretKey == null || secretKey.trim().isEmpty()) {
+                Log.e(TAG, "Nessuna chiave segreta configurata. Impossibile sincronizzare.");
+                notifyCompletion(null);
+                stopSelf();
+                return;
+            }
+            int ts = (int)(System.currentTimeMillis() / 1000L);
             byte[] syncPayload = TOTPGenerator.generateTimeSyncPayload(secretKey, ts);
+            if (syncPayload == null) {
+                Log.e(TAG, "Formato chiave non valido. Impossibile generare payload.");
+                new Handler(Looper.getMainLooper()).post(() -> 
+                    android.widget.Toast.makeText(this, "La chiave segreta non è valida (deve essere Base32).", android.widget.Toast.LENGTH_LONG).show()
+                );
+                notifyCompletion(null);
+                stopSelf();
+                return;
+            }
             Log.d(TAG, "Avvio Advertising con Time Sync Payload");
             DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), true, "", "Sincronizzazione Ora (TX)"));
             data = new AdvertiseData.Builder()
@@ -112,7 +134,25 @@ public class ApritiSedanoService extends Service {
                     .build();
         } else {
             String secretKey = SecretStore.getSecretKey(this);
+            if (secretKey == null || secretKey.trim().isEmpty()) {
+                Log.e(TAG, "Nessuna chiave segreta configurata. Impossibile inviare comando.");
+                new Handler(Looper.getMainLooper()).post(() -> 
+                    android.widget.Toast.makeText(this, "Nessuna chiave configurata! Impostala nella schermata principale.", android.widget.Toast.LENGTH_LONG).show()
+                );
+                notifyCompletion(null);
+                stopSelf();
+                return;
+            }
             String totp = TOTPGenerator.generateTOTP(secretKey);
+            if (totp == null) {
+                Log.e(TAG, "Formato chiave non valido. Impossibile generare TOTP.");
+                new Handler(Looper.getMainLooper()).post(() -> 
+                    android.widget.Toast.makeText(this, "La chiave segreta non è valida (deve essere Base32).", android.widget.Toast.LENGTH_LONG).show()
+                );
+                notifyCompletion(null);
+                stopSelf();
+                return;
+            }
             Log.d(TAG, "Avvio Advertising con TOTP: " + totp);
             DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), true, totp, ""));
             data = new AdvertiseData.Builder()

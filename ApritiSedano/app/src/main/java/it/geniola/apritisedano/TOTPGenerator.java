@@ -26,6 +26,17 @@ public class TOTPGenerator {
         return generateTOTP(base32Secret, timeWindow);
     }
 
+    /**
+     * Verifica se la stringa in input può essere usata come segreto Base32 valido.
+     * @param base32Secret Il segreto da testare.
+     * @return true se valido e decodificabile in almeno 1 byte, false altrimenti.
+     */
+    public static boolean isValidBase32Secret(String base32Secret) {
+        if (base32Secret == null || base32Secret.trim().isEmpty()) return false;
+        byte[] key = decodeBase32(base32Secret);
+        return key.length > 0;
+    }
+
     private static byte[] decodeBase32(String base32) {
         if (base32 == null) return new byte[0];
         base32 = base32.toUpperCase(Locale.US).replaceAll("[= -]", "");
@@ -53,6 +64,8 @@ public class TOTPGenerator {
 
     private static String generateTOTP(String base32Secret, long timeWindow) {
         byte[] key = decodeBase32(base32Secret);
+        if (key.length == 0) return null;
+
         byte[] data = ByteBuffer.allocate(8).putLong(timeWindow).array();
 
         try {
@@ -84,7 +97,10 @@ public class TOTPGenerator {
      */
     public static boolean verifyStateBeacon(String base32Secret, byte state, int timestamp, byte[] receivedHmac) {
         if (receivedHmac == null || receivedHmac.length < 4) return false;
+        if (base32Secret == null || base32Secret.trim().isEmpty()) return false;
+        
         byte[] key = decodeBase32(base32Secret);
+        if (key.length == 0) return false;
         byte[] data = new byte[5];
         data[0] = state;
         data[1] = (byte) ((timestamp >> 24) & 0xFF);
@@ -114,7 +130,9 @@ public class TOTPGenerator {
      * @return 9-byte payload: [0xFF, ts(4), hmac(4)]
      */
     public static byte[] generateTimeSyncPayload(String base32Secret, int timestamp) {
+        if (base32Secret == null || base32Secret.trim().isEmpty()) return null;
         byte[] key = decodeBase32(base32Secret);
+        if (key.length == 0) return null;
         byte[] data = new byte[5];
         data[0] = (byte) 0xFF;
         data[1] = (byte) ((timestamp >> 24) & 0xFF);
