@@ -68,7 +68,18 @@ public class ApritiSedanoService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.notification_title)));
-        
+
+        // Annulla eventuali timeout pendenti (es. da una precedente operazione di sync)
+        timeoutHandler.removeCallbacksAndMessages(null);
+
+        // Ferma le trasmissioni precedenti se il servizio era già attivo
+        if (advertiser != null) {
+            try { advertiser.stopAdvertising(advertiseCallback); } catch (Exception e) {}
+        }
+        if (scanner != null) {
+            try { scanner.stopScan(scanCallback); } catch (Exception e) {}
+        }
+
         boolean isSyncAction = intent != null && "ACTION_SYNC_TIME".equals(intent.getAction());
         startRadioOperations(isSyncAction);
         
@@ -211,6 +222,11 @@ public class ApritiSedanoService extends Service {
             if (result.getScanRecord() != null) {
                 byte[] payload = result.getScanRecord().getManufacturerSpecificData(0x02E5);
                 if (payload != null) {
+                    // Ignora i Beacon di stato (binari di 10 byte che iniziano per 0x01, 0x02 o 0x03) per non sporcare i log
+                    if (payload.length == 10 && (payload[0] == 0x01 || payload[0] == 0x02 || payload[0] == 0x03)) {
+                        return;
+                    }
+
                     String response = new String(payload, StandardCharsets.UTF_8);
                     
                     if (response.contains("ACK_OK_OPEN")) {

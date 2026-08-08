@@ -138,7 +138,7 @@ void BleHandler::init(int relayPin, int sensorPin) {
     _sensorPin = sensorPin;
 
     pinMode(_relayPin, OUTPUT);
-    digitalWrite(_relayPin, LOW);
+    digitalWrite(_relayPin, HW_RELAY_OFF_STATE);
     
     pinMode(_sensorPin, INPUT_PULLUP);
     _lastSensorState = digitalRead(_sensorPin);
@@ -201,7 +201,7 @@ void IRAM_ATTR BleHandler::handleButtonPress() {
 }
 
 void BleHandler::triggerRelay() {
-    digitalWrite(_relayPin, HIGH);  // HIGH attiva il transistor -> porta a GND l'IN del relè -> scatta
+    digitalWrite(_relayPin, HW_RELAY_ON_STATE);  // Attiva il relè secondo la configurazione in HardwareConfig.h
     _isRelayActive = true;
     _relayEndTime = millis() + 500; // 500ms impulse
 }
@@ -362,7 +362,7 @@ void BleHandler::loop() {
 
     if (_isRelayActive) {
         if (millis() > _relayEndTime) {
-            digitalWrite(_relayPin, LOW); // Torna LOW per spegnere il transistor e il relè
+            digitalWrite(_relayPin, HW_RELAY_OFF_STATE); // Torna a stato disattivato
             _isRelayActive = false;
         }
     }
