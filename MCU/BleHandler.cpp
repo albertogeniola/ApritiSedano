@@ -147,6 +147,12 @@ void BleHandler::init(int relayPin, int sensorPin) {
     pinMode(HW_BOOT_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(HW_BOOT_PIN), BleHandler::handleButtonPress, FALLING);
 
+#ifdef HW_EXTERNAL_BTN_PIN
+    // Configura anche il pulsante esterno con interrupt
+    pinMode(HW_EXTERNAL_BTN_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(HW_EXTERNAL_BTN_PIN), BleHandler::handleButtonPress, FALLING);
+#endif
+
     // Controllo validità orario
     time_t now;
     time(&now);
@@ -203,7 +209,7 @@ void IRAM_ATTR BleHandler::handleButtonPress() {
 void BleHandler::triggerRelay() {
     digitalWrite(_relayPin, HW_RELAY_ON_STATE);  // Attiva il relè secondo la configurazione in HardwareConfig.h
     _isRelayActive = true;
-    _relayEndTime = millis() + 500; // 500ms impulse
+    _relayEndTime = millis() + 1000; // 1000ms impulse (raddoppiato)
 }
 
 void BleHandler::startAdvertisingNACK() {

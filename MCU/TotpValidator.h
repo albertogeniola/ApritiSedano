@@ -22,6 +22,9 @@ public:
     
     // Nuovo metodo: Verifica la firma HMAC di un comando Time Sync
     static bool verifyTimeSync(uint32_t timestamp, byte* receivedHmac);
+    
+    // Controlla se è stato impostato un segreto
+    static bool hasSecret() { return _secretLen > 0; }
 
 private:
     static uint8_t _secret[64];

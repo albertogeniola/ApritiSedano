@@ -1,5 +1,11 @@
 #pragma once
 #include <Arduino.h>
+#include "HardwareConfig.h"
+
+#ifdef USE_PASSIVE_BUZZER
+#include "MelodyPlayer.h"
+#endif
+
 
 class BuzzerManager {
 public:

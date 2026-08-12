@@ -9,6 +9,7 @@ public:
     static void loop();
     static void pause();
     static void resume();
+    static bool isTimeInvalid() { return _isTimeInvalid; }
 
 private:
     static void startAdvertisingACK();

@@ -9,6 +9,12 @@
 //#define BOARD_ESP32_WROOM32
 
 // ==========================================
+// CONFIGURAZIONE BUZZER
+// ==========================================
+// De-commenta la seguente riga se stai utilizzando un buzzer passivo (permette di usare melodie)
+#define USE_PASSIVE_BUZZER
+
+// ==========================================
 // CONFIGURAZIONE PIN AUTOMATICA
 // ==========================================
 
@@ -19,11 +25,11 @@
     // Stato del segnale Relè:
     // - Per moduli relè commerciali separati (Active-LOW, senza transistor sul PCB): ON=LOW, OFF=HIGH
     // - Per PCB definitivo con transistor NPN Q1 (Active-HIGH): ON=HIGH, OFF=LOW
-    #define HW_RELAY_ON_STATE   LOW   
-    #define HW_RELAY_OFF_STATE  HIGH
+    #define HW_RELAY_ON_STATE   HIGH   
+    #define HW_RELAY_OFF_STATE  LOW
 
     #define HW_SENSOR_PIN       D2          // Morsetto D2 -> GPIO 2
-    #define HW_LED_PIN          LED_BUILTIN // LED integrato sulla scheda -> GPIO 15
+    #define HW_LED_PIN          D0          // LED RGB WS2812 connesso al pin D0
     #define HW_LED_ON_STATE     LOW   
     #define HW_LED_OFF_STATE    HIGH
     #define HW_BUZZER_PIN       D3          // Morsetto D3 -> GPIO 21
@@ -31,6 +37,7 @@
     #define HW_I2C_SDA          D4          // Morsetto D4 -> GPIO 22 (I2C SDA hardware)
     #define HW_I2C_SCL          D5          // Morsetto D5 -> GPIO 23 (I2C SCL hardware)
     #define HW_BOOT_PIN         9           // Pulsante BOOT sulla scheda -> GPIO 9
+    #define HW_EXTERNAL_BTN_PIN D6          // Pulsante esterno aggiunto al PCB
 
 #elif defined(BOARD_ESP32_WROOM32)
     // Sostituisci questi pin GPIO con quelli che sceglierai di usare sulla tua dev board ESP32
@@ -46,6 +53,7 @@
     #define HW_I2C_SDA          D21   // Default I2C SDA (GPIO 21)
     #define HW_I2C_SCL          D22   // Default I2C SCL (GPIO 22)
     #define HW_BOOT_PIN         D0    // BOOT button on standard WROOM32 dev boards (GPIO 0)
+    #define HW_EXTERNAL_BTN_PIN D19   // Esempio: GPIO 19 per pulsante esterno
 
 #else
     #error "Nessuna scheda hardware selezionata in HardwareConfig.h! De-commenta una delle schede in alto."

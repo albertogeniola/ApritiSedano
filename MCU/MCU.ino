@@ -7,6 +7,7 @@
 #include "RTCManager.h"
 #include "BuzzerManager.h"
 #include "Logger.h"
+#include "TotpValidator.h"
 
 void setup() {
     Serial.begin(115200);
@@ -59,6 +60,18 @@ void loop() {
 
     // BLE background tasks (es. timeout dell'ACK)
     BleHandler::loop();
+    
+    // Aggiornamento stato base del LED
+    LedState currentState = LedIndicator::getState();
+    if (currentState == LED_IDLE || currentState == LED_OUT_OF_SYNC || currentState == LED_UNCONFIGURED) {
+        if (BleHandler::isTimeInvalid()) {
+            LedIndicator::setState(LED_OUT_OF_SYNC);
+        } else if (!TotpValidator::hasSecret()) {
+            LedIndicator::setState(LED_UNCONFIGURED);
+        } else {
+            LedIndicator::setState(LED_IDLE);
+        }
+    }
     
     // Check Serial for 'conf' command
     static String serialInput = "";
