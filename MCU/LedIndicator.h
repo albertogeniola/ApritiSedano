@@ -7,7 +7,9 @@ enum LedState {
     LED_ERROR,
     LED_CONFIG,
     LED_UNCONFIGURED,
-    LED_OUT_OF_SYNC
+    LED_OUT_OF_SYNC,
+    LED_DUPLICATE,
+    LED_HEARTBEAT
 };
 
 class LedIndicator {

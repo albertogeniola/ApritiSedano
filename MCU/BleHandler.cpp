@@ -98,6 +98,7 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                             // Check idempotency (ignore if same code within 60 seconds)
                             if (totpCode == BleHandler::_lastValidCode && (nowMs - BleHandler::_lastValidTime < 60000)) {
                                 Serial.println("Valid TOTP received, but it's a duplicate. Resetting ACK timer.");
+                                LedIndicator::setState(LED_DUPLICATE);
                                 BleHandler::_needsStartAdvertisingACK = true;
                                 return;
                             }
@@ -325,6 +326,10 @@ void BleHandler::loop() {
             _timeSyncEndTime = millis() + 300000; // 5 minuti
             Serial.println("Pulsante premuto. Entro in modalità sincronizzazione orario per 5 minuti.");
             _needsUpdateStateBeacon = true;
+        } else if (!_isTimeInvalid && TotpValidator::hasSecret()) {
+            // Check di Stato / Heartbeat se il sistema è sano e pronto
+            LedIndicator::setState(LED_HEARTBEAT);
+            Serial.println("Pulsante premuto: Heartbeat di diagnostica attivato.");
         }
     }
 

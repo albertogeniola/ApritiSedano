@@ -31,6 +31,14 @@ void LedIndicator::setRGB(uint8_t r, uint8_t g, uint8_t b) {
 
 void LedIndicator::setState(LedState state) {
     if (_currentState == state) return;
+
+    // DEBOUNCE: Se stiamo già mostrando un "SUCCESS" (che dura 2 secondi),
+    // ignoriamo le transizioni a "DUPLICATE". Questo evita che i pacchetti ripetuti
+    // dell'app taglino l'animazione verde per farla diventare gialla.
+    if (_currentState == LED_SUCCESS && state == LED_DUPLICATE) {
+        return;
+    }
+
     _currentState = state;
     _stateStartTime = millis();
     _lastToggleTime = millis();
@@ -50,11 +58,17 @@ void LedIndicator::setState(LedState state) {
         case LED_SUCCESS:
             setRGB(0, 255, 0); // Verde acceso iniziale
             break;
+        case LED_DUPLICATE:
+            setRGB(255, 255, 0); // Giallo acceso iniziale (lampeggiante per duplicato)
+            break;
         case LED_ERROR:
             setRGB(255, 0, 0); // Rosso acceso iniziale
             break;
         case LED_CONFIG:
             setRGB(255, 255, 255); // Bianco acceso iniziale
+            break;
+        case LED_HEARTBEAT:
+            setRGB(0, 255, 0); // Verde per l'heartbeat
             break;
     }
 }
@@ -80,6 +94,25 @@ void LedIndicator::loop() {
                 if (_ledOn) setRGB(255, 128, 0);
                 else setRGB(0, 0, 0);
                 _lastToggleTime = now;
+            }
+            break;
+
+        case LED_DUPLICATE:
+            // Giallo lampeggiante: 2 blink da 400ms (400 ON, 400 OFF)
+            if (now - _lastToggleTime >= 400) {
+                _ledOn = !_ledOn;
+                if (_ledOn) {
+                    setRGB(255, 255, 0);
+                } else {
+                    setRGB(0, 0, 0);
+                    _blinkCount++;
+                }
+                _lastToggleTime = now;
+                
+                // Dopo 2 blink completi
+                if (_blinkCount >= 2) {
+                    setState(LED_IDLE); // Torna in idle
+                }
             }
             break;
 
@@ -128,6 +161,13 @@ void LedIndicator::loop() {
                 if (_ledOn) setRGB(255, 255, 255);
                 else setRGB(0, 0, 0);
                 _lastToggleTime = now;
+            }
+            break;
+            
+        case LED_HEARTBEAT:
+            // Una singola pulsazione verde di 400ms per la diagnostica
+            if (now - _stateStartTime >= 400) {
+                setState(LED_IDLE); // Torna allo stato di default
             }
             break;
     }
