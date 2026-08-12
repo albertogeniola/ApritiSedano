@@ -42,13 +42,14 @@ public class DebugActivity extends AppCompatActivity {
     private Timer packetTimer;
     private int packetsSentCount = 0;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    
+    private String targetMacFilter;
+    private Device targetDevice;
+    private android.widget.Button btnActionToggle;
+    private android.widget.Button btnActionStop;
 
-    private TextView tvBoxState;
-    private Button btnActionToggle;
-    private Button btnActionStop;
     private BluetoothLeScanner stateScanner;
     private long lastReceivedTimestamp = 0;
-    private int currentBoxState = -1;
     private static final UUID TARGET_SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0");
     private android.widget.CheckBox cbFilterBeacons;
     private android.widget.CheckBox cbFilterCommands;
@@ -59,10 +60,8 @@ public class DebugActivity extends AppCompatActivity {
             String action = intent.getAction();
             if (ApritiSedanoService.ACTION_SERVICE_STOPPED.equals(action) || 
                 ApritiSedanoService.ACTION_OPERATION_RESULT.equals(action)) {
-                btnActionToggle.setEnabled(true);
-                if (btnActionStop != null) {
-                    btnActionStop.setEnabled(false);
-                }
+                if (btnActionToggle != null) btnActionToggle.setEnabled(true);
+                if (btnActionStop != null) btnActionStop.setEnabled(false);
                 if (adapter != null) {
                     adapter.setTransmitting(false);
                 }
@@ -75,6 +74,7 @@ public class DebugActivity extends AppCompatActivity {
         public void onScanResult(int callbackType, ScanResult result) {
             if (result.getScanRecord() != null) {
                 byte[] payload = result.getScanRecord().getManufacturerSpecificData(0x02E5);
+                String mac = result.getDevice().getAddress();
                 if (payload != null && payload.length >= 1) {
                     if (payload[0] == 0x01 && payload.length >= 10) {
                         byte state = payload[1];
@@ -93,38 +93,27 @@ public class DebugActivity extends AppCompatActivity {
                         }
                         if (ts <= lastReceivedTimestamp) return; // Ignore replays to avoid spam
 
-                        if (TOTPGenerator.verifyStateBeacon(SecretStore.getSecretKey(DebugActivity.this), state, (int)ts, hmac)) {
-                            lastReceivedTimestamp = ts;
-                            currentBoxState = state;
-                            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX: " + (state == 1 ? "APERTO" : "CHIUSO") + " (ts: " + ts + ")"));
-                            runOnUiThread(() -> {
-                                updateList();
-                                if (state == 1) {
-                                    tvBoxState.setText("Stato: APERTO");
-                                    tvBoxState.setTextColor(Color.parseColor("#4CAF50"));
-                                } else {
-                                    tvBoxState.setText("Stato: CHIUSO");
-                                    tvBoxState.setTextColor(Color.parseColor("#F44336"));
-                                }
-                                if (btnActionStop != null && !btnActionStop.isEnabled()) {
-                                    btnActionToggle.setEnabled(true);
-                                }
-                                btnActionToggle.setText(state == 1 ? "CHIUDI" : "APRI");
-                            });
+                        Device device = DeviceManager.getDeviceByMac(DebugActivity.this, mac);
+                        if (device != null) {
+                            if (TOTPGenerator.verifyStateBeacon(device.getSecretKey(), state, (int)ts, hmac)) {
+                                lastReceivedTimestamp = ts;
+                                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX [" + device.getName() + "]: " + (state == 1 ? "APERTO" : "CHIUSO") + " (ts: " + ts + ")"));
+                                runOnUiThread(() -> {
+                                    updateList();
+                                });
+                            }
+                        } else {
+                            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX da dispositivo sconosciuto: " + mac));
                         }
                     } else if (payload[0] == 0x02) {
                         DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX: Orologio Scarico"));
                         runOnUiThread(() -> {
                             updateList();
-                            tvBoxState.setText("Stato: Orologio Scarico");
-                            tvBoxState.setTextColor(Color.parseColor("#FF9800"));
                         });
                     } else if (payload[0] == 0x03) {
                         DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX: Sincronizzazione in corso"));
                         runOnUiThread(() -> {
                             updateList();
-                            tvBoxState.setText("Stato: Sincronizzazione...");
-                            tvBoxState.setTextColor(Color.parseColor("#2196F3"));
                         });
                     }
                 }
@@ -139,9 +128,50 @@ public class DebugActivity extends AppCompatActivity {
             getSupportActionBar().hide();
         }
         setContentView(R.layout.activity_debug);
+        
+        targetMacFilter = getIntent().getStringExtra("EXTRA_TARGET_MAC");
+        if (targetMacFilter != null) {
+            targetDevice = DeviceManager.getDeviceByMac(this, targetMacFilter);
+            if (targetDevice != null) {
+                android.view.View llActions = findViewById(R.id.ll_debug_actions);
+                if (llActions != null) {
+                    llActions.setVisibility(android.view.View.VISIBLE);
+                }
+            }
+        }
 
         rvLogs = findViewById(R.id.rv_debug_logs);
         rvLogs.setLayoutManager(new LinearLayoutManager(this));
+
+        btnActionToggle = findViewById(R.id.btn_debug_action_toggle);
+        btnActionStop = findViewById(R.id.btn_debug_action_stop);
+
+        if (btnActionToggle != null && targetDevice != null) {
+            btnActionToggle.setOnClickListener(v -> {
+                btnActionToggle.setEnabled(false);
+                btnActionStop.setEnabled(true);
+                if (adapter != null) adapter.setTransmitting(true);
+                
+                Intent serviceIntent = new Intent(this, ApritiSedanoService.class);
+                serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, targetDevice.getMacAddress());
+                serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, targetDevice.getSecretKey());
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent);
+                } else {
+                    startService(serviceIntent);
+                }
+            });
+        }
+
+        if (btnActionStop != null) {
+            btnActionStop.setOnClickListener(v -> {
+                if (btnActionToggle != null) btnActionToggle.setEnabled(true);
+                btnActionStop.setEnabled(false);
+                if (adapter != null) adapter.setTransmitting(false);
+                stopService(new Intent(this, ApritiSedanoService.class));
+                android.widget.Toast.makeText(this, "Operazione interrotta", android.widget.Toast.LENGTH_SHORT).show();
+            });
+        }
 
         cbFilterBeacons = findViewById(R.id.cb_filter_beacons);
         cbFilterCommands = findViewById(R.id.cb_filter_commands);
@@ -154,33 +184,7 @@ public class DebugActivity extends AppCompatActivity {
             updateList();
         });
 
-        tvBoxState = findViewById(R.id.tv_debug_box_state);
-        btnActionToggle = findViewById(R.id.btn_debug_action_toggle);
-        btnActionStop = findViewById(R.id.btn_debug_action_stop);
 
-        btnActionToggle.setOnClickListener(v -> {
-            btnActionToggle.setEnabled(false);
-            btnActionStop.setEnabled(true);
-            if (adapter != null) {
-                adapter.setTransmitting(true);
-            }
-            Intent serviceIntent = new Intent(this, ApritiSedanoService.class);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent);
-            } else {
-                startService(serviceIntent);
-            }
-        });
-
-        btnActionStop.setOnClickListener(v -> {
-            btnActionToggle.setEnabled(true);
-            btnActionStop.setEnabled(false);
-            if (adapter != null) {
-                adapter.setTransmitting(false);
-            }
-            stopService(new Intent(this, ApritiSedanoService.class));
-            android.widget.Toast.makeText(this, "Operazione interrotta", android.widget.Toast.LENGTH_SHORT).show();
-        });
 
         // Setup adapter with current logs
         logsList = DebugLogger.getInstance().getLogs();
@@ -194,7 +198,13 @@ public class DebugActivity extends AppCompatActivity {
                 boolean showCommands = cbFilterCommands != null && cbFilterCommands.isChecked();
                 boolean isBeacon = entry.getMessage() != null && entry.getMessage().startsWith("Beacon");
                 
-                if ((isBeacon && showBeacons) || (!isBeacon && showCommands)) {
+                boolean matchMac = true;
+                if (targetDevice != null) {
+                    String msg = entry.getMessage();
+                    matchMac = msg != null && (msg.contains(targetDevice.getMacAddress()) || msg.contains(targetDevice.getName()) || msg.contains(targetMacFilter) || msg.contains("To: " + targetMacFilter));
+                }
+                
+                if (matchMac && ((isBeacon && showBeacons) || (!isBeacon && showCommands))) {
                     logsList.add(0, entry);
                     if (logsList.size() > 100) {
                         logsList.remove(logsList.size() - 1);
@@ -213,7 +223,14 @@ public class DebugActivity extends AppCompatActivity {
         
         for (DebugLogEntry entry : DebugLogger.getInstance().getLogs()) {
             boolean isBeacon = entry.getMessage() != null && entry.getMessage().startsWith("Beacon");
-            if ((isBeacon && showBeacons) || (!isBeacon && showCommands)) {
+            
+            boolean matchMac = true;
+            if (targetDevice != null) {
+                String msg = entry.getMessage();
+                matchMac = msg != null && (msg.contains(targetDevice.getMacAddress()) || msg.contains(targetDevice.getName()) || msg.contains(targetMacFilter) || msg.contains("To: " + targetMacFilter));
+            }
+            
+            if (matchMac && ((isBeacon && showBeacons) || (!isBeacon && showCommands))) {
                 logsList.add(entry);
             }
         }
@@ -238,28 +255,11 @@ public class DebugActivity extends AppCompatActivity {
             registerReceiver(serviceReceiver, filter);
         }
         startStateScanning();
-
-        // Timer to refresh the UI every second so the "VALIDO/SCADUTO" label updates dynamically
-        timer = new Timer();
-        timer.scheduleAtFixedRate(new TimerTask() {
-            @Override
-            public void run() {
-                mainHandler.post(() -> {
-                    if (adapter != null) {
-                        adapter.toggleBlink();
-                    }
-                });
-            }
-        }, 500, 500);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        if (timer != null) {
-            timer.cancel();
-            timer = null;
-        }
         unregisterReceiver(serviceReceiver);
         stopStateScanning();
     }

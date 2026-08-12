@@ -1,6 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme (Light). -->
-    <style name="Theme.ApritiSedano" parent="Theme.MaterialComponents.Light.DarkActionBar">
+    <style name="Theme.ApritiSedano" parent="Theme.MaterialComponents.Light.NoActionBar">
         <!-- Primary brand color. -->
         <item name="colorPrimary">@color/sedano_primary</item>
         <item name="colorPrimaryVariant">@color/sedano_primary_dark</item>

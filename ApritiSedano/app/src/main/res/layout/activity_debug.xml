@@ -5,7 +5,7 @@
     android:layout_height="match_parent"
     android:fitsSystemWindows="true"
     android:orientation="vertical"
-    android:background="#FFFFFF">
+    android:background="?attr/colorSurface">
 
     <!-- Top Bar -->
     <LinearLayout
@@ -22,7 +22,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Log BLE Debug"
-            android:textColor="#FFFFFF"
+            android:textColor="?android:attr/textColorPrimaryInverse"
             android:textSize="20sp"
             android:textStyle="bold" />
             
@@ -37,26 +37,7 @@
             android:paddingHorizontal="8dp"/>
     </LinearLayout>
 
-    <!-- State Info -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp"
-        android:gravity="center"
-        android:background="#f5f5f5"
-        android:elevation="2dp">
 
-        <TextView
-            android:id="@+id/tv_debug_box_state"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Stato: IN ATTESA..."
-            android:textColor="#333333"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-    </LinearLayout>
 
     <!-- Filters -->
     <LinearLayout
@@ -64,15 +45,14 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:padding="8dp"
-        android:gravity="center"
-        android:background="#eeeeee">
+        android:gravity="center">
         
         <CheckBox
             android:id="@+id/cb_filter_beacons"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Beacons"
-            android:textColor="#333333"
+            android:textColor="?android:attr/textColorPrimary"
             android:checked="true"
             android:layout_marginEnd="16dp"/>
 
@@ -81,7 +61,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Comandi (TX/ACK)"
-            android:textColor="#333333"
+            android:textColor="?android:attr/textColorPrimary"
             android:checked="true" />
             
     </LinearLayout>
@@ -95,15 +75,17 @@
         android:padding="8dp"
         android:clipToPadding="false"/>
 
-    <!-- Bottom Action Button -->
+    <!-- Bottom Action Button (per-device debug) -->
     <LinearLayout
+        android:id="@+id/ll_debug_actions"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:padding="16dp"
         android:clipToPadding="false"
-        android:background="#FFFFFF"
-        android:elevation="8dp">
+        android:background="?attr/colorSurface"
+        android:elevation="8dp"
+        android:visibility="gone">
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_debug_action_toggle"

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:padding="16dp"
+    android:gravity="center_vertical"
+    android:background="?attr/selectableItemBackground">
+
+    <ImageView
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:src="@drawable/ic_sedano_main"
+        android:layout_marginEnd="16dp"/>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tv_scan_mac"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="AA:BB:CC:DD:EE:FF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#333333" />
+
+        <TextView
+            android:id="@+id/tv_scan_rssi"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Segnale: -60 dBm"
+            android:textSize="14sp"
+            android:textColor="#666666" />
+            
+    </LinearLayout>
+
+</LinearLayout>

@@ -1,11 +1,22 @@
 #include "MelodyPlayer.h"
 
-// Frequenze concentrate attorno ai 2048Hz per massimizzare il volume
-#define NOTE_L1  1850
-#define NOTE_L2  1950
-#define NOTE_RES 2048 // Massima risonanza
-#define NOTE_H1  2150
-#define NOTE_H2  2250
+// Frequenze per le note musicali (Ottave alte per risuonare meglio sul buzzer piezoelettrico)
+#define NOTE_G5  784
+#define NOTE_B5  988
+#define NOTE_C6  1047
+#define NOTE_D6  1175
+#define NOTE_E6  1319
+#define NOTE_F6  1397
+#define NOTE_G6  1568
+#define NOTE_A6  1760
+#define NOTE_B6  1976
+#define NOTE_C7  2093
+#define NOTE_CS7 2217
+#define NOTE_D7  2349
+#define NOTE_E7  2637
+#define NOTE_F7  2794
+#define NOTE_FS7 2960
+#define NOTE_G7  3136
 
 // Rest note (0 Hz)
 #define REST     0
@@ -19,20 +30,21 @@ unsigned long MelodyPlayer::_nextNoteTime = 0;
 bool MelodyPlayer::_isPlaying = false;
 bool MelodyPlayer::_isNoteOn = false;
 
-// Melodies definitions - Aumentata la durata (ms) per renderle più percettibili
-const int openNotes[] = { NOTE_L2, NOTE_RES, NOTE_H1, NOTE_H2 };
-const int openDurations[] = { 150, 150, 150, 300 };
+// Super Mario Level Complete (Apertura) completa
+const int openNotes[] = { NOTE_G5, NOTE_C6, NOTE_E6, NOTE_G6, NOTE_C7, NOTE_E7, NOTE_G7, NOTE_E7 };
+const int openDurations[] = { 130, 130, 130, 130, 130, 130, 400, 400 };
 
-const int closeNotes[] = { NOTE_H2, NOTE_H1, NOTE_RES };
-const int closeDurations[] = { 150, 150, 300 };
+// Super Mario Death/Game Over (Chiusura) completa
+const int closeNotes[] = { NOTE_B6, NOTE_F7, REST, NOTE_F7, NOTE_F7, NOTE_E7, NOTE_D7, NOTE_C7, NOTE_E6, NOTE_C6 };
+const int closeDurations[] = { 150, 150, 200, 150, 150, 150, 150, 250, 250, 400 };
 
-const int errorDesyncNotes[] = { NOTE_RES, REST, NOTE_RES };
+const int errorDesyncNotes[] = { NOTE_C7, REST, NOTE_C7 };
 const int errorDesyncDurations[] = { 600, 200, 600 };
 
-const int errorWrongCodeNotes[] = { NOTE_L1, NOTE_H2, REST, NOTE_L1, NOTE_H2 };
+const int errorWrongCodeNotes[] = { NOTE_B5, NOTE_G6, REST, NOTE_B5, NOTE_G6 };
 const int errorWrongCodeDurations[] = { 200, 300, 150, 200, 300 };
 
-const int successNotes[] = { NOTE_L2, NOTE_RES };
+const int successNotes[] = { NOTE_C6, NOTE_C7 };
 const int successDurations[] = { 200, 400 };
 
 void MelodyPlayer::init(int pin) {

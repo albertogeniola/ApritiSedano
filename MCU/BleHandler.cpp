@@ -40,8 +40,7 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
         if (BleHandler::_isPaused) return;
 
-        if (advertisedDevice.haveManufacturerData() && 
-            advertisedDevice.isAdvertisingService(BLEUUID(BleHandler::SERVICE_UUID))) {
+        if (advertisedDevice.haveManufacturerData()) {
             String mData = advertisedDevice.getManufacturerData();
             // L'app Android invia Manufacturer Data con ID 0x02E5 e payload ASCII (es. "123456")
             if (mData.length() >= 8) { 
@@ -79,7 +78,33 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                             BuzzerManager::playErrorSequence();
                         }
                     } else if (mData.length() >= 8) {
-                        Serial.println("---- PACCHETTO BLE (Manufacturer Data 0x02E5) RICEVUTO ----");
+                        String totpStr;
+                        if (mData.length() >= 14) {
+                            // Nuovo formato multi-dispositivo: [0xE5 0x02] [MAC 6-bytes] [TOTP 6-bytes]
+                            uint8_t* myMac = (uint8_t*)BLEDevice::getAddress().getNative();
+                            bool macMatch = true;
+                            // L'indirizzo MAC BLE viene trasmesso in Little Endian over-the-air, quindi Android lo legge rovesciato rispetto al getNative() dell'ESP32.
+                            for (int i = 0; i < 6; i++) {
+                                if ((uint8_t)mData[2 + i] != myMac[5 - i]) {
+                                    macMatch = false;
+                                    break;
+                                }
+                            }
+                            
+                            if (!macMatch) {
+                                Serial.printf("MAC mismatch. Received: %02X:%02X:%02X:%02X:%02X:%02X, Expected(Native Reversed): %02X:%02X:%02X:%02X:%02X:%02X\n",
+                                    (uint8_t)mData[2], (uint8_t)mData[3], (uint8_t)mData[4], (uint8_t)mData[5], (uint8_t)mData[6], (uint8_t)mData[7],
+                                    myMac[5], myMac[4], myMac[3], myMac[2], myMac[1], myMac[0]);
+                                return;
+                            }
+                            Serial.println("---- PACCHETTO BLE INDIRIZZATO A QUESTO DEVICE RICEVUTO ----");
+                            totpStr = mData.substring(8, 14);
+                        } else {
+                            // Vecchio formato broadcast (retrocompatibilità per l'app attuale non ancora aggiornata)
+                            Serial.println("---- PACCHETTO BLE BROADCAST (VECCHIO FORMATO) RICEVUTO ----");
+                            totpStr = mData.substring(2, 8);
+                        }
+                        
                         if (BleHandler::_isTimeInvalid && !BleHandler::_isTimeSyncMode) {
                             Serial.println("ERRORE: Orario non valido (RTC scarico). Operazione bloccata.");
                             BuzzerManager::playErrorSequence();
@@ -87,8 +112,6 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                             return;
                         }
                         
-                        // Estrarre la stringa ASCII che rappresenta il TOTP
-                        String totpStr = mData.substring(2, 8); // Prende i successivi 6 caratteri
                         uint32_t totpCode = totpStr.toInt();
                         Serial.printf("TOTP estratto dal pacchetto: %u (String: %s)\n", totpCode, totpStr.c_str());
 
@@ -163,6 +186,9 @@ void BleHandler::init(int relayPin, int sensorPin) {
     }
 
     BLEDevice::init("ApritiSedano");
+    Serial.printf("\n==================================\n");
+    Serial.printf("MAC ADDRESS DISPOSITIVO: %s\n", BLEDevice::getAddress().toString().c_str());
+    Serial.printf("==================================\n\n");
     
     Serial.printf("BLE Listening on Service UUID: %s\n", SERVICE_UUID);
 
