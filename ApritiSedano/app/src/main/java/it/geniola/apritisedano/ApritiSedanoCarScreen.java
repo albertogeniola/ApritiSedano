@@ -11,21 +11,27 @@ import androidx.car.app.CarToast;
 import androidx.car.app.Screen;
 import androidx.car.app.model.Action;
 import androidx.car.app.model.CarColor;
+import androidx.car.app.model.ItemList;
+import androidx.car.app.model.ListTemplate;
+import androidx.car.app.model.MessageTemplate;
 import androidx.car.app.model.Pane;
 import androidx.car.app.model.PaneTemplate;
 import androidx.car.app.model.Row;
 import androidx.car.app.model.Template;
 import androidx.lifecycle.DefaultLifecycleObserver;
 import androidx.lifecycle.LifecycleOwner;
+import java.util.List;
 
 public class ApritiSedanoCarScreen extends Screen implements DefaultLifecycleObserver {
     private boolean isOperating = false;
+    private String operatingDeviceName = "";
 
     private final BroadcastReceiver resultReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (ApritiSedanoService.ACTION_OPERATION_RESULT.equals(intent.getAction())) {
                 isOperating = false;
+                operatingDeviceName = "";
                 String state = intent.getStringExtra(ApritiSedanoService.EXTRA_BOX_STATE);
                 String display = "Sconosciuto";
                 if ("OPEN".equals(state)) {
@@ -37,6 +43,7 @@ public class ApritiSedanoCarScreen extends Screen implements DefaultLifecycleObs
                 invalidate();
             } else if (ApritiSedanoService.ACTION_SERVICE_STOPPED.equals(intent.getAction())) {
                 isOperating = false;
+                operatingDeviceName = "";
                 invalidate();
             }
         }
@@ -67,70 +74,78 @@ public class ApritiSedanoCarScreen extends Screen implements DefaultLifecycleObs
     @NonNull
     @Override
     public Template onGetTemplate() {
-        Pane.Builder paneBuilder = new Pane.Builder();
-        
-        // Icona del garage (che abbiamo creato)
+        List<Device> devices = DeviceManager.getDevices(getCarContext());
+
+        if (devices.isEmpty()) {
+            return new MessageTemplate.Builder("Nessun dispositivo configurato. Apri l'app sul telefono per aggiungerne uno.")
+                    .setTitle("ApritiSedano")
+                    .setHeaderAction(Action.APP_ICON)
+                    .build();
+        }
+
         androidx.core.graphics.drawable.IconCompat iconCompat = androidx.core.graphics.drawable.IconCompat.createWithResource(getCarContext(), R.drawable.ic_magic_box);
         androidx.car.app.model.CarIcon carIcon = new androidx.car.app.model.CarIcon.Builder(iconCompat).setTint(CarColor.DEFAULT).build();
 
-        Action.Builder openActionBuilder = new Action.Builder()
-            .setTitle(isOperating ? "IN ATTESA..." : "APRI SEDANO")
-            .setBackgroundColor(isOperating ? CarColor.DEFAULT : CarColor.BLUE);
-
-        if (!isOperating) {
-            openActionBuilder.setOnClickListener(() -> {
-                isOperating = true;
-                invalidate(); // Aggiorna la UI per mostrare i nuovi pulsanti
-                
-                Intent serviceIntent = new Intent(getCarContext(), ApritiSedanoService.class);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    getCarContext().startForegroundService(serviceIntent);
-                } else {
-                    getCarContext().startService(serviceIntent);
-                }
-            });
-        }
-        
-        paneBuilder.addAction(openActionBuilder.build());
-
-        Action.Builder cancelActionBuilder = new Action.Builder()
-            .setTitle("TERMINA INVIO")
-            .setBackgroundColor(isOperating ? CarColor.RED : CarColor.DEFAULT);
+        if (isOperating) {
+            Pane.Builder paneBuilder = new Pane.Builder();
             
-        // Tentiamo di usare l'API nativa per disabilitare, ma gestiamo la logica anche nel listener
-        // per compatibilità con versioni vecchie di Android Auto.
-        cancelActionBuilder.setOnClickListener(() -> {
-            if (isOperating) {
-                // Interrompi il servizio
-                Intent serviceIntent = new Intent(getCarContext(), ApritiSedanoService.class);
-                getCarContext().stopService(serviceIntent);
+            Action.Builder cancelActionBuilder = new Action.Builder()
+                .setTitle("ANNULLA")
+                .setBackgroundColor(CarColor.RED)
+                .setOnClickListener(() -> {
+                    Intent serviceIntent = new Intent(getCarContext(), ApritiSedanoService.class);
+                    getCarContext().stopService(serviceIntent);
+                    isOperating = false;
+                    operatingDeviceName = "";
+                    invalidate();
+                });
                 
-                isOperating = false;
-                invalidate(); // Ripristina la UI
-            }
-        });
-        
-        // Se la libreria lo supporta (Car API 5+), la disabilitazione visiva avverrà tramite questa chiamata:
-        try {
-            cancelActionBuilder.setEnabled(isOperating);
-        } catch (NoSuchMethodError e) {
-            // Ignora se eseguito su una versione molto vecchia della libreria in esecuzione
+            paneBuilder.addAction(cancelActionBuilder.build());
+            
+            Row row = new Row.Builder()
+                .setTitle(operatingDeviceName)
+                .addText("Trasmissione e attesa segnale in corso...")
+                .setImage(carIcon, Row.IMAGE_TYPE_LARGE)
+                .build();
+                
+            paneBuilder.addRow(row);
+            paneBuilder.setImage(carIcon);
+            
+            return new PaneTemplate.Builder(paneBuilder.build())
+                .setTitle("ApritiSedano")
+                .setHeaderAction(Action.APP_ICON)
+                .build();
         }
 
-        paneBuilder.addAction(cancelActionBuilder.build());
+        ItemList.Builder itemListBuilder = new ItemList.Builder();
         
-        Row row = new Row.Builder()
-            .setTitle("ApritiSedano è Pronto")
-            .addText(isOperating ? "Trasmissione e attesa segnale in corso..." : "Premi il pulsante per aprire o chiudere il portone del tuo garage.")
-            .setImage(carIcon, Row.IMAGE_TYPE_LARGE)
-            .build();
-            
-        paneBuilder.addRow(row);
-        paneBuilder.setImage(carIcon);
-        
-        return new PaneTemplate.Builder(paneBuilder.build())
-            .setTitle("ApritiSedano")
+        for (Device device : devices) {
+            itemListBuilder.addItem(new Row.Builder()
+                .setTitle(device.getName())
+                .addText(device.getMacAddress())
+                .setImage(carIcon)
+                .setOnClickListener(() -> {
+                    isOperating = true;
+                    operatingDeviceName = device.getName();
+                    invalidate();
+                    
+                    Intent serviceIntent = new Intent(getCarContext(), ApritiSedanoService.class);
+                    serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, device.getMacAddress());
+                    serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, device.getSecretKey());
+                    
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        getCarContext().startForegroundService(serviceIntent);
+                    } else {
+                        getCarContext().startService(serviceIntent);
+                    }
+                })
+                .build());
+        }
+
+        return new ListTemplate.Builder()
+            .setTitle("I Miei Dispositivi")
             .setHeaderAction(Action.APP_ICON)
+            .setSingleList(itemListBuilder.build())
             .build();
     }
 }
