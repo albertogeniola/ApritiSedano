@@ -67,16 +67,22 @@ tasks.register("deployForAndroidAuto") {
         val apkPath = "${buildDirProvider.get().asFile.absolutePath}/outputs/apk/debug/app-debug.apk"
 
         println("--> 1/2: Installando l'APK mascherato da Play Store...")
-        ProcessBuilder(adbPath, "install", "-t", "-i", "com.android.vending", "-r", apkPath)
+        val installProcess = ProcessBuilder(adbPath, "install", "-t", "-i", "com.android.vending", "-r", apkPath)
             .inheritIO()
             .start()
-            .waitFor()
+        
+        if (installProcess.waitFor() != 0) {
+            throw GradleException("Errore durante l'installazione dell'APK. Assicurati che lo smartphone sia collegato e che il debug USB sia attivo.")
+        }
 
         println("--> 2/2: Forzando l'arresto di Android Auto per aggiornare il launcher...")
-        ProcessBuilder(adbPath, "shell", "am", "force-stop", "com.google.android.projection.gearhead")
+        val forceStopProcess = ProcessBuilder(adbPath, "shell", "am", "force-stop", "com.google.android.projection.gearhead")
             .inheritIO()
             .start()
-            .waitFor()
+            
+        if (forceStopProcess.waitFor() != 0) {
+            throw GradleException("Errore durante l'arresto forzato di Android Auto.")
+        }
 
         println("--> Deploy completato! L'app è pronta per essere provata in auto.")
     }
