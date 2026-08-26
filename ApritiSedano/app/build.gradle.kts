@@ -66,7 +66,15 @@ tasks.register("deployForAndroidAuto") {
         val adbPath = adbProvider.get().asFile.absolutePath
         val apkPath = "${buildDirProvider.get().asFile.absolutePath}/outputs/apk/debug/app-debug.apk"
 
-        println("--> 1/2: Installando l'APK mascherato da Play Store...")
+        println("--> 1/3: Pulizia della cache e dei dati dell'app...")
+        val clearProcess = ProcessBuilder(adbPath, "shell", "pm", "clear", "it.geniola.apritisedano")
+            .inheritIO()
+            .start()
+        
+        // Ignoriamo l'exit code di clearProcess perché potrebbe fallire se l'app non è ancora installata
+        clearProcess.waitFor()
+
+        println("--> 2/3: Installando l'APK mascherato da Play Store...")
         val installProcess = ProcessBuilder(adbPath, "install", "-t", "-i", "com.android.vending", "-r", apkPath)
             .inheritIO()
             .start()
@@ -75,7 +83,7 @@ tasks.register("deployForAndroidAuto") {
             throw GradleException("Errore durante l'installazione dell'APK. Assicurati che lo smartphone sia collegato e che il debug USB sia attivo.")
         }
 
-        println("--> 2/2: Forzando l'arresto di Android Auto per aggiornare il launcher...")
+        println("--> 3/3: Forzando l'arresto di Android Auto per aggiornare il launcher...")
         val forceStopProcess = ProcessBuilder(adbPath, "shell", "am", "force-stop", "com.google.android.projection.gearhead")
             .inheritIO()
             .start()
