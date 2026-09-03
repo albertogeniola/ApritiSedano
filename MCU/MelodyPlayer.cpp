@@ -47,6 +47,15 @@ const int errorWrongCodeDurations[] = { 200, 300, 150, 200, 300 };
 const int successNotes[] = { NOTE_C6, NOTE_C7 };
 const int successDurations[] = { 200, 400 };
 
+const int antennaInternalNotes[] = { NOTE_C6 };
+const int antennaInternalDurations[] = { 1500 };
+
+const int antennaExternalNotes[] = { NOTE_C6, REST, NOTE_C6 };
+const int antennaExternalDurations[] = { 1000, 300, 1000 };
+
+const int antennaErrorNotes[] = { NOTE_B5, REST, NOTE_B5, REST, NOTE_B5 };
+const int antennaErrorDurations[] = { 800, 200, 800, 200, 800 };
+
 void MelodyPlayer::init(int pin) {
     _pin = pin;
     if (_pin != -1) {
@@ -83,6 +92,21 @@ void MelodyPlayer::play(MelodyType type) {
             _currentMelodyNotes = successNotes;
             _currentMelodyDurations = successDurations;
             _currentMelodyLength = sizeof(successNotes) / sizeof(successNotes[0]);
+            break;
+        case MelodyType::ANTENNA_INTERNAL:
+            _currentMelodyNotes = antennaInternalNotes;
+            _currentMelodyDurations = antennaInternalDurations;
+            _currentMelodyLength = sizeof(antennaInternalNotes) / sizeof(antennaInternalNotes[0]);
+            break;
+        case MelodyType::ANTENNA_EXTERNAL:
+            _currentMelodyNotes = antennaExternalNotes;
+            _currentMelodyDurations = antennaExternalDurations;
+            _currentMelodyLength = sizeof(antennaExternalNotes) / sizeof(antennaExternalNotes[0]);
+            break;
+        case MelodyType::ANTENNA_ERROR:
+            _currentMelodyNotes = antennaErrorNotes;
+            _currentMelodyDurations = antennaErrorDurations;
+            _currentMelodyLength = sizeof(antennaErrorNotes) / sizeof(antennaErrorNotes[0]);
             break;
         default:
             return;

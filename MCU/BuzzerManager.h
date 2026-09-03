@@ -24,6 +24,11 @@ public:
     // Suona 1 beep lungo (2s) per successo (sincronizzazione avvenuta)
     static void playSuccessSequence();
 
+    // Sequenze audio per configurazione antenna
+    static void playAntennaInternalSequence(); // 1 beep lungo
+    static void playAntennaExternalSequence(); // 2 beep lunghi
+    static void playAntennaErrorSequence();    // 3 beep lunghi
+
 private:
     static int _pin;
     static int _beepsRemaining;

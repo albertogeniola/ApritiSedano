@@ -88,6 +88,8 @@ void Logger::clearLogs() {
     Serial.println("Log files cleared successfully.");
 }
 
+#include "AntennaManager.h"
+
 void Logger::printSysInfo() {
     size_t totalBytes = LittleFS.totalBytes();
     size_t usedBytes = LittleFS.usedBytes();
@@ -97,5 +99,11 @@ void Logger::printSysInfo() {
     Serial.printf("LittleFS Total Space: %d Bytes\n", totalBytes);
     Serial.printf("LittleFS Used Space: %d Bytes\n", usedBytes);
     Serial.printf("LittleFS Free Space: %d Bytes\n", totalBytes - usedBytes);
+    if (AntennaManager::isSupported()) {
+        Serial.printf("Antenna Config: %s\n", AntennaManager::isExternal() ? "ESTERNA (U.FL)" : "INTERNA (Ceramica)");
+    } else {
+        Serial.println("Antenna Config: Solo antenna interna (switch non supportato)");
+    }
     Serial.println("-------------------");
 }
+

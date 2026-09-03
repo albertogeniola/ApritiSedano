@@ -77,6 +77,49 @@ void BuzzerManager::playSuccessSequence() {
 #endif
 }
 
+void BuzzerManager::playAntennaInternalSequence() {
+#ifdef USE_PASSIVE_BUZZER
+    MelodyPlayer::play(MelodyType::ANTENNA_INTERNAL);
+#else
+    if (_beepsRemaining > 0) return;
+    _currentBeepDurationMs = 1500;
+    _currentSilenceDurationMs = 500;
+    _beepsRemaining = 1;
+    _isBeeping = true;
+    _nextToggleTime = millis() + _currentBeepDurationMs;
+    if (_pin != -1) digitalWrite(_pin, HIGH);
+#endif
+}
+
+void BuzzerManager::playAntennaExternalSequence() {
+#ifdef USE_PASSIVE_BUZZER
+    MelodyPlayer::play(MelodyType::ANTENNA_EXTERNAL);
+#else
+    if (_beepsRemaining > 0) return;
+    _currentBeepDurationMs = 1000;
+    _currentSilenceDurationMs = 300;
+    _beepsRemaining = 2;
+    _isBeeping = true;
+    _nextToggleTime = millis() + _currentBeepDurationMs;
+    if (_pin != -1) digitalWrite(_pin, HIGH);
+#endif
+}
+
+void BuzzerManager::playAntennaErrorSequence() {
+#ifdef USE_PASSIVE_BUZZER
+    MelodyPlayer::play(MelodyType::ANTENNA_ERROR);
+#else
+    if (_beepsRemaining > 0) return;
+    _currentBeepDurationMs = 800;
+    _currentSilenceDurationMs = 200;
+    _beepsRemaining = 3;
+    _isBeeping = true;
+    _nextToggleTime = millis() + _currentBeepDurationMs;
+    if (_pin != -1) digitalWrite(_pin, HIGH);
+#endif
+}
+
+
 void BuzzerManager::loop() {
 #ifdef USE_PASSIVE_BUZZER
     MelodyPlayer::loop();

@@ -8,10 +8,14 @@
 #include "BuzzerManager.h"
 #include "Logger.h"
 #include "TotpValidator.h"
+#include "AntennaManager.h"
 
 void setup() {
     Serial.begin(115200);
     
+    // Inizializza controllo antenna (interna/esterna)
+    AntennaManager::init();
+
     // OTTIMIZZAZIONE ENERGETICA: Spegniamo il modulo WiFi dato che il sistema è 100% offline
     WiFi.mode(WIFI_OFF);
     

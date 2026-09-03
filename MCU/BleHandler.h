@@ -30,6 +30,9 @@ private:
     static bool _isTimeInvalid;
     static bool _isTimeSyncMode;
     static unsigned long _timeSyncEndTime;
+    static bool _buttonIsDown;
+    static unsigned long _buttonPressStartTime;
+    static bool _button10sTriggered;
     static volatile bool _buttonPressedFlag;
     static volatile bool _needsUpdateStateBeacon;
     static volatile bool _needsStartAdvertisingACK;

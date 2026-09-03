@@ -9,6 +9,7 @@
 #include <BLEAdvertisedDevice.h>
 #include "HardwareConfig.h"
 #include "RTCManager.h"
+#include "AntennaManager.h"
 
 int BleHandler::_relayPin = -1;
 int BleHandler::_sensorPin = -1;
@@ -20,6 +21,9 @@ unsigned long BleHandler::_lastValidTime = 0;
 bool BleHandler::_isTimeInvalid = false;
 bool BleHandler::_isTimeSyncMode = false;
 unsigned long BleHandler::_timeSyncEndTime = 0;
+bool BleHandler::_buttonIsDown = false;
+unsigned long BleHandler::_buttonPressStartTime = 0;
+bool BleHandler::_button10sTriggered = false;
 volatile bool BleHandler::_buttonPressedFlag = false;
 volatile bool BleHandler::_needsUpdateStateBeacon = false;
 volatile bool BleHandler::_needsStartAdvertisingACK = false;
@@ -167,14 +171,12 @@ void BleHandler::init(int relayPin, int sensorPin) {
     pinMode(_sensorPin, INPUT_PULLUP);
     _lastSensorState = digitalRead(_sensorPin);
 
-    // Configura il pulsante BOOT con interrupt
+    // Configura pulsante BOOT
     pinMode(HW_BOOT_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(HW_BOOT_PIN), BleHandler::handleButtonPress, FALLING);
 
 #ifdef HW_EXTERNAL_BTN_PIN
-    // Configura anche il pulsante esterno con interrupt
+    // Configura pulsante esterno sul PCB
     pinMode(HW_EXTERNAL_BTN_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(HW_EXTERNAL_BTN_PIN), BleHandler::handleButtonPress, FALLING);
 #endif
 
     // Controllo validità orario
@@ -345,17 +347,54 @@ void BleHandler::updateStateBeacon() {
 void BleHandler::loop() {
     if (_isPaused) return;
 
-    if (_buttonPressedFlag) {
-        _buttonPressedFlag = false;
-        if (_isTimeInvalid && !_isTimeSyncMode) {
-            _isTimeSyncMode = true;
-            _timeSyncEndTime = millis() + 300000; // 5 minuti
-            Serial.println("Pulsante premuto. Entro in modalità sincronizzazione orario per 5 minuti.");
-            _needsUpdateStateBeacon = true;
-        } else if (!_isTimeInvalid && TotpValidator::hasSecret()) {
-            // Check di Stato / Heartbeat se il sistema è sano e pronto
-            LedIndicator::setState(LED_HEARTBEAT);
-            Serial.println("Pulsante premuto: Heartbeat di diagnostica attivato.");
+    // Gestione Pulsanti (HW_EXTERNAL_BTN_PIN prioritario con fallback su HW_BOOT_PIN)
+    bool isBtnPressed = false;
+#ifdef HW_EXTERNAL_BTN_PIN
+    if (digitalRead(HW_EXTERNAL_BTN_PIN) == LOW) isBtnPressed = true;
+#endif
+    if (!isBtnPressed && digitalRead(HW_BOOT_PIN) == LOW) isBtnPressed = true;
+
+    unsigned long now = millis();
+
+    if (isBtnPressed) {
+        if (!_buttonIsDown) {
+            _buttonIsDown = true;
+            _buttonPressStartTime = now;
+            _button10sTriggered = false;
+        } else if (!_button10sTriggered && (now - _buttonPressStartTime >= 10000)) {
+            _button10sTriggered = true;
+            Serial.println("Pulsante tenuto premuto per 10 secondi: Toggle Antenna!");
+            AntennaState result = AntennaManager::toggle();
+            if (result == ANTENNA_INTERNAL) {
+                BuzzerManager::playAntennaInternalSequence(); // 1 beep lungo
+                Logger::logOperation("ANT_INTERNA");
+            } else if (result == ANTENNA_EXTERNAL) {
+                BuzzerManager::playAntennaExternalSequence(); // 2 beep lunghi
+                Logger::logOperation("ANT_ESTERNA");
+            } else {
+                BuzzerManager::playAntennaErrorSequence();    // 3 beep lunghi
+                Logger::logOperation("ANT_ERR_UNSUPPORTED");
+            }
+        }
+    } else {
+        if (_buttonIsDown) {
+            unsigned long pressDuration = now - _buttonPressStartTime;
+            _buttonIsDown = false;
+            
+            // Pressione breve (< 10s con debounce > 50ms)
+            if (!_button10sTriggered && pressDuration > 50) {
+                if (_isTimeInvalid && !_isTimeSyncMode) {
+                    _isTimeSyncMode = true;
+                    _timeSyncEndTime = now + 300000; // 5 minuti
+                    Serial.println("Pulsante premuto. Entro in modalità sincronizzazione orario per 5 minuti.");
+                    _needsUpdateStateBeacon = true;
+                } else if (!_isTimeInvalid && TotpValidator::hasSecret()) {
+                    // Check di Stato / Heartbeat se il sistema è sano e pronto
+                    LedIndicator::setState(LED_HEARTBEAT);
+                    Serial.println("Pulsante premuto: Heartbeat di diagnostica attivato.");
+                }
+            }
+            _button10sTriggered = false;
         }
     }
 

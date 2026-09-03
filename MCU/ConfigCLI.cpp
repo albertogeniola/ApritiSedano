@@ -13,6 +13,7 @@
 #endif
 
 #include "Logger.h"
+#include "AntennaManager.h"
 
 Preferences preferences;
 
@@ -114,6 +115,7 @@ void ConfigCLI::showMenu() {
     Serial.println("6. Leggi lo storico delle operazioni (Logs)");
     Serial.println("7. Svuota lo storico delle operazioni (Clear Logs)");
     Serial.println("8. Mostra informazioni di sistema e memoria (SysInfo)");
+    Serial.println("9. Commuta Antenna (Interna / Esterna)");
     Serial.print("Scelta: ");
 }
 
@@ -243,6 +245,13 @@ void ConfigCLI::handle() {
             Logger::clearLogs();
         } else if (choice == "8") {
             Logger::printSysInfo();
+        } else if (choice == "9") {
+            if (AntennaManager::isSupported()) {
+                AntennaState res = AntennaManager::toggle();
+                Serial.printf("Nuova configurazione antenna: %s\n", res == ANTENNA_EXTERNAL ? "ESTERNA (U.FL)" : "INTERNA (Ceramica)");
+            } else {
+                Serial.println("Questa scheda non supporta la commutazione dell'antenna.");
+            }
         } else {
             Serial.println("Invalid choice.");
         }

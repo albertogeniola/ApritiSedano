@@ -6,7 +6,10 @@ enum class MelodyType {
     CLOSE,
     ERROR_DESYNC,
     ERROR_WRONG_CODE,
-    SUCCESS
+    SUCCESS,
+    ANTENNA_INTERNAL,
+    ANTENNA_EXTERNAL,
+    ANTENNA_ERROR
 };
 
 class MelodyPlayer {
