@@ -5,8 +5,8 @@
 // Rimuovi il commento (//) SOLO sulla scheda che stai per programmare.
 // ==========================================
 
-//#define BOARD_XIAO_ESP32C6
-#define BOARD_ESP32_WROOM32
+#define BOARD_XIAO_ESP32C6
+//#define BOARD_ESP32_WROOM32
 
 // ==========================================
 // CONFIGURAZIONE BUZZER
@@ -29,6 +29,9 @@
     #define HW_RELAY_OFF_STATE  LOW
 
     #define HW_SENSOR_PIN       D2          // Morsetto D2 -> GPIO 2
+    #define HW_SENSOR_PIN_MODE  INPUT       // Pull-down R8 da 10k presente sul PCB (nessun pull-up interno)
+    #define HW_SENSOR_CLOSED_STATE HIGH     // Sul PCB a porta chiusa il sensore chiude su 3.3V (HIGH)
+
     #define HW_LED_PIN          D0          // LED RGB WS2812 connesso al pin D0
     #define HW_LED_ON_STATE     LOW   
     #define HW_LED_OFF_STATE    HIGH
@@ -63,6 +66,9 @@
     #define HW_RELAY_ON_STATE   HIGH  
     #define HW_RELAY_OFF_STATE  LOW
     #define HW_SENSOR_PIN       D5    // Esempio: GPIO 5
+    #define HW_SENSOR_PIN_MODE  INPUT_PULLUP // Standalone: pull-up interno
+    #define HW_SENSOR_CLOSED_STATE LOW       // Standalone: sensore a GND (LOW quando chiuso)
+
     #define HW_LED_PIN          D2    // Il LED blu integrato sulla maggior parte delle ESP32-WROOM-32 è sul pin D2 (GPIO 2)
     #define HW_LED_ON_STATE     HIGH  // L'ESP32 standard di solito ha il LED "Active High"
     #define HW_LED_OFF_STATE    LOW

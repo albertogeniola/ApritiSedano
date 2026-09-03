@@ -136,7 +136,7 @@ class BoxScanCallbacks : public BLEAdvertisedDeviceCallbacks {
                             BleHandler::_lastValidTime = nowMs;
                             
                             // Decide which beep sequence to play based on the current state BEFORE the relay triggers
-                            if (digitalRead(BleHandler::_sensorPin) == LOW) {
+                            if (digitalRead(BleHandler::_sensorPin) == HW_SENSOR_CLOSED_STATE) {
                                 BuzzerManager::playOpenSequence();
                                 Logger::logOperation("APERTO");
                             } else {
@@ -168,7 +168,7 @@ void BleHandler::init(int relayPin, int sensorPin) {
     pinMode(_relayPin, OUTPUT);
     digitalWrite(_relayPin, HW_RELAY_OFF_STATE);
     
-    pinMode(_sensorPin, INPUT_PULLUP);
+    pinMode(_sensorPin, HW_SENSOR_PIN_MODE);
     _lastSensorState = digitalRead(_sensorPin);
 
     // Configura pulsante BOOT
@@ -267,8 +267,8 @@ void BleHandler::startAdvertisingACK() {
     _isAckActive = true;
     _ackEndTime = millis() + 3000; // 3 seconds ACK
     
-    // Read sensor state
-    uint8_t doorState = digitalRead(_sensorPin) == LOW ? 0 : 1; // 0 closed, 1 open
+    // Read sensor state (0 = closed, 1 = open)
+    uint8_t doorState = (digitalRead(_sensorPin) == HW_SENSOR_CLOSED_STATE) ? 0 : 1;
 
     static BLEAdvertisementData oScanResponseData;
     oScanResponseData = BLEAdvertisementData();
@@ -313,8 +313,8 @@ void BleHandler::updateStateBeacon() {
         payload[0] = 0x01;
     }
     
-    // Byte 1: Stato Sensore
-    payload[1] = (digitalRead(_sensorPin) == LOW) ? 0x00 : 0x01;
+    // Byte 1: Stato Sensore (0x00 = Closed, 0x01 = Open)
+    payload[1] = (digitalRead(_sensorPin) == HW_SENSOR_CLOSED_STATE) ? 0x00 : 0x01;
     
     time_t now;
     time(&now);
@@ -423,12 +423,12 @@ void BleHandler::loop() {
         if (currentSensorState != _lastSensorState) {
             _lastSensorState = currentSensorState;
             
-            if (currentSensorState == LOW) {
+            if (currentSensorState == HW_SENSOR_CLOSED_STATE) {
                 // CLOSED
-                Serial.println(">>> [DEBUG] SENSOR STATE CHANGED: CLOSED (LOW)");
+                Serial.println(">>> [DEBUG] SENSOR STATE CHANGED: CLOSED");
             } else {
                 // OPEN
-                Serial.println(">>> [DEBUG] SENSOR STATE CHANGED: OPEN (HIGH)");
+                Serial.println(">>> [DEBUG] SENSOR STATE CHANGED: OPEN");
             }
             // Aggiorna subito il beacon quando cambia lo stato, a meno che non siamo in ACK
             updateStateBeacon();
