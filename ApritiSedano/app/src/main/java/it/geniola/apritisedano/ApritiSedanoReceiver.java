@@ -20,7 +20,15 @@ public class ApritiSedanoReceiver extends BroadcastReceiver {
         Log.d(TAG, "Ricevuto Intent: " + action);
 
         if (ACTION_OPEN_BOX.equals(action)) {
+            java.util.List<Device> devices = DeviceManager.getDevices(context);
+            if (devices.isEmpty()) {
+                Log.w(TAG, "Nessun dispositivo configurato per l'apertura rapida.");
+                return;
+            }
+            Device target = devices.get(0);
             Intent serviceIntent = new Intent(context, ApritiSedanoService.class);
+            serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, target.getMacAddress());
+            serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, target.getSecretKey());
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(serviceIntent);
             } else {

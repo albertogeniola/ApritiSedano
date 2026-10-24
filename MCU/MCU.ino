@@ -9,6 +9,34 @@
 #include "Logger.h"
 #include "TotpValidator.h"
 #include "AntennaManager.h"
+#include <time.h>
+
+// Calcola se una data/ora UTC cade nell'ora legale europea (CEST, UTC+2) o solare (CET, UTC+1)
+static bool isItalySummerTime(const struct tm& utc) {
+    if (utc.tm_mon < 2 || utc.tm_mon > 9) return false; // Gen, Feb, Nov, Dic -> CET (UTC+1)
+    if (utc.tm_mon > 2 && utc.tm_mon < 9) return true;  // Apr..Set -> CEST (UTC+2)
+
+    // Marzo (tm_mon == 2) e Ottobre (tm_mon == 9) hanno 31 giorni.
+    // L'ultima domenica cade tra il giorno 25 e il 31: (tm_mday - tm_wday >= 25) indica che
+    // siamo nell'ultima domenica o nei giorni successivi.
+    int lastSundayCheck = utc.tm_mday - utc.tm_wday;
+    if (utc.tm_mon == 2) { // Marzo: cambio alle 01:00 UTC dell'ultima domenica
+        if (lastSundayCheck < 25) return false;
+        if (utc.tm_wday == 0) return utc.tm_hour >= 1;
+        return true;
+    } else { // Ottobre: cambio alle 01:00 UTC dell'ultima domenica
+        if (lastSundayCheck < 25) return true;
+        if (utc.tm_wday == 0) return utc.tm_hour < 1;
+        return false;
+    }
+}
+
+static void getItalyLocalTime(time_t utcNow, struct tm* outItalyTm) {
+    struct tm utcTm;
+    gmtime_r(&utcNow, &utcTm);
+    time_t italyEpoch = utcNow + (isItalySummerTime(utcTm) ? 7200 : 3600);
+    gmtime_r(&italyEpoch, outItalyTm);
+}
 
 void setup() {
     Serial.begin(115200);
@@ -47,7 +75,7 @@ void setup() {
     
     struct tm timeinfo;
     if (getLocalTime(&timeinfo, 100)) {
-        Serial.println(&timeinfo, "Current Time: %A, %B %d %Y %H:%M:%S");
+        Serial.println(&timeinfo, "Current Time (UTC): %A, %B %d %Y %H:%M:%S");
     } else {
         Serial.println("Current Time: Not synchronized (use 'conf' to sync via NTP).");
     }
@@ -77,6 +105,26 @@ void loop() {
         }
     }
     
+    // Riavvio giornaliero programmato alle 03:00 (ora italiana CET/CEST) per prevenire accumuli di memoria.
+    // Richiede almeno 10 minuti di uptime (600.000 ms) per evitare loop di riavvio nella finestra 03:00-03:04.
+    static unsigned long lastRebootCheckMs = 0;
+    unsigned long nowMs = millis();
+    if (nowMs >= 600000UL && (nowMs - lastRebootCheckMs >= 1000UL)) {
+        lastRebootCheckMs = nowMs;
+        if (!BleHandler::isTimeInvalid() && !BleHandler::isBusy()) {
+            time_t utcNow = time(nullptr);
+            if (utcNow >= 1704067200) {
+                struct tm italyTm;
+                getItalyLocalTime(utcNow, &italyTm);
+                if (italyTm.tm_hour == 3 && italyTm.tm_min < 5) {
+                    Serial.println("Scheduled daily 03:00 AM (Italy time) maintenance reboot...");
+                    Serial.flush();
+                    ESP.restart();
+                }
+            }
+        }
+    }
+
     // Check Serial for 'conf' command
     static String serialInput = "";
     while (Serial.available()) {
@@ -91,7 +139,7 @@ void loop() {
                 LedIndicator::setState(LED_IDLE);   // Back to idle
             }
             serialInput = ""; // Clear input after processing
-        } else {
+        } else if (serialInput.length() < 32) {
             serialInput += c;
         }
     }

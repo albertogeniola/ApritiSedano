@@ -12,7 +12,8 @@ public:
 
     // Valida un codice TOTP rispetto all'ora di sistema attuale
     // toleranceSteps: tolleranza in intervalli da 30 secondi (es. 1 = +/- 30s)
-    static bool validate(uint32_t code, int toleranceSteps = 1);
+    // outMatchedStep: opzionale, restituisce l'indice dello step temporale (unixTime / 30) validato
+    static bool validate(uint32_t code, int toleranceSteps = 1, uint64_t* outMatchedStep = nullptr);
 
     // Genera un TOTP per uno specifico timestamp Unix
     static uint32_t generateForTime(time_t unixTime);

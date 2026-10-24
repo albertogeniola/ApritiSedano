@@ -104,7 +104,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
             holder.btnAction.setEnabled(true);
             if (device.getCurrentState() == 1) {
                 holder.btnAction.setText("CHIUDI");
-            } else if (device.getCurrentState() == 4) {
+            } else if (device.getCurrentState() == 4 || device.getCurrentState() == 3) {
                 holder.btnAction.setText("SYNC");
             } else {
                 holder.btnAction.setText("APRI");

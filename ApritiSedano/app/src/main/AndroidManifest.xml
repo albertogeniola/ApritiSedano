@@ -44,6 +44,11 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/it.geniola.apritisedano" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.nfc.action.NDEF_DISCOVERED" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="apritisedano" android:host="trigger" />
+            </intent-filter>
 
             <!-- Voice Assistant Trigger -->
             <intent-filter>

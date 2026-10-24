@@ -43,17 +43,23 @@ uint32_t TotpValidator::generateForTime(time_t unixTime) {
     return truncatedHash % 1000000; // 6 digit TOTP
 }
 
-bool TotpValidator::validate(uint32_t code, int toleranceSteps) {
+bool TotpValidator::validate(uint32_t code, int toleranceSteps, uint64_t* outMatchedStep) {
     if (_secretLen == 0) return false;
 
     time_t now;
     time(&now);
+    int64_t currentStep = (int64_t)(now / 30);
 
     // Check current window and +/- tolerance
     for (int i = -toleranceSteps; i <= toleranceSteps; i++) {
-        time_t checkTime = now + (i * 30);
+        int64_t checkStep = currentStep + i;
+        if (checkStep < 0) continue;
+        time_t checkTime = (time_t)(checkStep * 30);
         uint32_t expectedCode = generateForTime(checkTime);
         if (expectedCode == code) {
+            if (outMatchedStep != nullptr) {
+                *outMatchedStep = (uint64_t)checkStep;
+            }
             return true;
         }
     }

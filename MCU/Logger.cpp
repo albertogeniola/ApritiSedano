@@ -96,6 +96,7 @@ void Logger::printSysInfo() {
     
     Serial.println("--- SYSTEM INFO ---");
     Serial.printf("Flash Chip Size: %d Bytes\n", ESP.getFlashChipSize());
+    Serial.printf("Free Heap RAM: %u Bytes (Min Free: %u Bytes)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
     Serial.printf("LittleFS Total Space: %d Bytes\n", totalBytes);
     Serial.printf("LittleFS Used Space: %d Bytes\n", usedBytes);
     Serial.printf("LittleFS Free Space: %d Bytes\n", totalBytes - usedBytes);

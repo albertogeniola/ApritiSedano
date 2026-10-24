@@ -178,8 +178,8 @@ public class MainActivity extends AppCompatActivity {
         serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, device.getMacAddress());
         serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, device.getSecretKey());
         
-        if (device.getCurrentState() == 4) {
-            // Time invalid, sync it
+        if (device.getCurrentState() == 4 || device.getCurrentState() == 3) {
+            // Time invalid or MCU in Sync Mode, sync it
             serviceIntent.setAction("ACTION_SYNC_TIME");
         }
         
@@ -225,6 +225,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleIntent(Intent intent) {
+        if (intent == null) return;
         String action = intent.getAction();
         Log.d(TAG, "Intent action received: " + action);
         
@@ -239,6 +240,14 @@ public class MainActivity extends AppCompatActivity {
                 }
                 return; 
             }
+        }
+
+        if (ApritiSedanoReceiver.ACTION_OPEN_BOX.equals(action)) {
+            List<Device> devices = DeviceManager.getDevices(this);
+            if (!devices.isEmpty()) {
+                onDeviceActionClick(devices.get(0));
+            }
+            return;
         }
 
         // Handle auto-triggering via Deep Link (NFC)
@@ -430,7 +439,7 @@ public class MainActivity extends AppCompatActivity {
     private final ScanCallback stateScanCallback = new ScanCallback() {
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
-            if (result.getScanRecord() != null) {
+            if (result.getScanRecord() != null && result.getDevice() != null) {
                 byte[] payload = result.getScanRecord().getManufacturerSpecificData(0x02E5);
                 String mac = result.getDevice().getAddress();
                 
@@ -441,9 +450,32 @@ public class MainActivity extends AppCompatActivity {
                         runOnUiThread(() -> deviceAdapter.updateDeviceState(mac, 3)); // Syncing
                     } else if (payload[0] == 0x01 && payload.length >= 10) {
                         byte state = payload[1];
+                        long ts = ((payload[2] & 0xFFL) << 24) |
+                                  ((payload[3] & 0xFFL) << 16) |
+                                  ((payload[4] & 0xFFL) << 8)  |
+                                  (payload[5] & 0xFFL);
+                        byte[] hmac = new byte[4];
+                        System.arraycopy(payload, 6, hmac, 0, 4);
+
+                        long currentTs = System.currentTimeMillis() / 1000L;
+                        if (Math.abs(currentTs - ts) > 300) {
+                            return; // Reject beacons with >5 min clock drift
+                        }
+
                         runOnUiThread(() -> {
-                            if (state == 1) deviceAdapter.updateDeviceState(mac, 1); // Open
-                            else deviceAdapter.updateDeviceState(mac, 2); // Closed
+                            if (deviceList == null) return;
+                            for (Device d : deviceList) {
+                                if (d.getMacAddress().equalsIgnoreCase(mac)) {
+                                    if (ts < d.getLastBeaconTimestamp()) {
+                                        return; // Anti-replay
+                                    }
+                                    if (TOTPGenerator.verifyStateBeacon(d.getSecretKey(), state, (int) ts, hmac)) {
+                                        d.setLastBeaconTimestamp(ts);
+                                        deviceAdapter.updateDeviceState(mac, state == 1 ? 1 : 2);
+                                    }
+                                    break;
+                                }
+                            }
                         });
                     }
                 }

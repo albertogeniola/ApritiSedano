@@ -1,5 +1,6 @@
 #include "ConfigCLI.h"
 #include "TotpValidator.h"
+#include "BleHandler.h"
 #include <WiFi.h>
 #include <Preferences.h>
 #include <mbedtls/base64.h>
@@ -15,10 +16,7 @@
 #include "Logger.h"
 #include "AntennaManager.h"
 
-Preferences preferences;
-
 void ConfigCLI::init() {
-    preferences.begin("apritisedano", false);
     loadSecret();
 }
 
@@ -49,42 +47,23 @@ static size_t decodeBase32(const char* input, uint8_t* output) {
     return count;
 }
 
-static String encodeBase32(const uint8_t* data, size_t length) {
-    String out = "";
-    int buffer = 0;
-    int bitsLeft = 0;
-    for (size_t i = 0; i < length; i++) {
-        buffer = (buffer << 8) | data[i];
-        bitsLeft += 8;
-        while (bitsLeft >= 5) {
-            out += b32chars[(buffer >> (bitsLeft - 5)) & 0x1F];
-            bitsLeft -= 5;
-        }
-    }
-    if (bitsLeft > 0) {
-        out += b32chars[(buffer << (5 - bitsLeft)) & 0x1F];
-    }
-    while (out.length() % 8 != 0) {
-        out += '=';
-    }
-    return out;
-}
-
 void ConfigCLI::loadSecret() {
+    Preferences preferences;
+    if (!preferences.begin("apritisedano", true)) {
+        Serial.println("No TOTP secret found in NVS.");
+        return;
+    }
     size_t len = preferences.getBytesLength("totp_sec");
     if (len > 0) {
         uint8_t* buffer = new uint8_t[len];
         preferences.getBytes("totp_sec", buffer, len);
         TotpValidator::init(buffer, len);
-        
-        // Codifica i byte caricati in Base32 per la stampa a video
-        String b32Str = encodeBase32(buffer, len);
-        Serial.printf("Secret loaded from NVS (Base32): %s\n", b32Str.c_str());
-        
+        Serial.printf("TOTP secret loaded from NVS (%u bytes).\n", (unsigned int)len);
         delete[] buffer;
     } else {
         Serial.println("No TOTP secret found in NVS.");
     }
+    preferences.end();
 }
 
 String ConfigCLI::readString() {
@@ -96,7 +75,7 @@ String ConfigCLI::readString() {
                 if (input.length() > 0) {
                     break;
                 }
-            } else {
+            } else if (input.length() < 128) {
                 input += c;
             }
         }
@@ -119,13 +98,21 @@ void ConfigCLI::showMenu() {
     Serial.print("Scelta: ");
 }
 
+static void shutdownWiFi() {
+    WiFi.scanDelete();
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    Serial.println("Wi-Fi disabled.");
+}
+
 void ConfigCLI::syncNTP() {
     Serial.println("\nScanning Wi-Fi networks...");
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     int n = WiFi.scanNetworks();
-    if (n == 0) {
+    if (n <= 0) {
         Serial.println("No networks found.");
+        shutdownWiFi();
         return;
     }
     for (int i = 0; i < n; ++i) {
@@ -136,16 +123,20 @@ void ConfigCLI::syncNTP() {
     int idx = idxStr.toInt();
     if (idx < 0 || idx >= n) {
         Serial.println("Invalid index.");
+        shutdownWiFi();
         return;
     }
+    String selectedSSID = WiFi.SSID(idx);
+    WiFi.scanDelete();
+
     Serial.print("Enter password (leave empty if open): ");
     String pwd = readString();
     
-    Serial.printf("Connecting to %s...\n", WiFi.SSID(idx).c_str());
+    Serial.printf("Connecting to %s...\n", selectedSSID.c_str());
     if (pwd.length() > 0) {
-        WiFi.begin(WiFi.SSID(idx).c_str(), pwd.c_str());
+        WiFi.begin(selectedSSID.c_str(), pwd.c_str());
     } else {
-        WiFi.begin(WiFi.SSID(idx).c_str());
+        WiFi.begin(selectedSSID.c_str());
     }
     
     int retries = 0;
@@ -156,6 +147,7 @@ void ConfigCLI::syncNTP() {
     }
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("\nFailed to connect.");
+        shutdownWiFi();
         return;
     }
     Serial.println("\nConnected! Syncing NTP...");
@@ -168,14 +160,13 @@ void ConfigCLI::syncNTP() {
         Serial.println("Time synchronized successfully!");
         Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
         
-        // Salva nel modulo RTC
+        // Salva nel modulo RTC e aggiorna stato validità orario BLE
         time_t now;
         time(&now);
         RTCManager::setRTC(now);
+        BleHandler::onTimeUpdated();
     }
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    Serial.println("Wi-Fi disabled.");
+    shutdownWiFi();
 }
 
 void ConfigCLI::setSecret() {
@@ -190,9 +181,15 @@ void ConfigCLI::setSecret() {
     size_t actualLen = decodeBase32(b32.c_str(), decoded);
     
     if (actualLen > 0) {
-        preferences.putBytes("totp_sec", decoded, actualLen);
-        TotpValidator::init(decoded, actualLen);
-        Serial.println("Secret successfully saved and loaded.");
+        Preferences preferences;
+        if (preferences.begin("apritisedano", false)) {
+            preferences.putBytes("totp_sec", decoded, actualLen);
+            preferences.end();
+            TotpValidator::init(decoded, actualLen);
+            Serial.println("Secret successfully saved and loaded.");
+        } else {
+            Serial.println("Failed to open NVS storage.");
+        }
     } else {
         Serial.println("Failed to decode Base32. Invalid string.");
     }
@@ -212,13 +209,14 @@ void ConfigCLI::handle() {
         } else if (choice == "3") {
             Serial.print("Enter Unix Timestamp: ");
             String tsStr = readString();
-            time_t epoch = (time_t) tsStr.toInt();
+            time_t epoch = (time_t) strtoull(tsStr.c_str(), nullptr, 10);
             if (epoch > 0) {
                 struct timeval tv;
                 tv.tv_sec = epoch;
                 tv.tv_usec = 0;
                 settimeofday(&tv, NULL);
                 RTCManager::setRTC(epoch);
+                BleHandler::onTimeUpdated();
                 Serial.println("Manual Time and RTC updated successfully.");
             } else {
                 Serial.println("Invalid timestamp.");

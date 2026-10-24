@@ -33,13 +33,14 @@
     #define HW_SENSOR_CLOSED_STATE HIGH     // Sul PCB a porta chiusa il sensore chiude su 3.3V (HIGH)
 
     #define HW_LED_PIN          D0          // LED RGB WS2812 connesso al pin D0
+    #define HW_LED_IS_RGB       true
     #define HW_LED_ON_STATE     LOW   
     #define HW_LED_OFF_STATE    HIGH
     #define HW_BUZZER_PIN       D3          // Morsetto D3 -> GPIO 21
     // I2C Pins per DS3231 RTC
     #define HW_I2C_SDA          D4          // Morsetto D4 -> GPIO 22 (I2C SDA hardware)
     #define HW_I2C_SCL          D5          // Morsetto D5 -> GPIO 23 (I2C SCL hardware)
-    #define HW_BOOT_PIN         D9           // Pulsante BOOT sulla scheda -> GPIO 9
+    #define HW_BOOT_PIN         9           // Pulsante BOOT sulla scheda -> GPIO 9 (nota: D9 su XIAO C6 è GPIO 20)
     #define HW_EXTERNAL_BTN_PIN D6          // Pulsante esterno aggiunto al PCB
 
     // Supporto Antenna Esterna (RF switch integrato su XIAO ESP32-C6)
@@ -70,6 +71,7 @@
     #define HW_SENSOR_CLOSED_STATE LOW       // Standalone: sensore a GND (LOW quando chiuso)
 
     #define HW_LED_PIN          D2    // Il LED blu integrato sulla maggior parte delle ESP32-WROOM-32 è sul pin D2 (GPIO 2)
+    #define HW_LED_IS_RGB       false
     #define HW_LED_ON_STATE     HIGH  // L'ESP32 standard di solito ha il LED "Active High"
     #define HW_LED_OFF_STATE    LOW
     #define HW_BUZZER_PIN       D18   // Esempio: GPIO 18 (pin solitamente libero)

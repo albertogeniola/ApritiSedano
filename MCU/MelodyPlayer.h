@@ -24,7 +24,8 @@ private:
     static const int* _currentMelodyDurations;
     static int _currentMelodyLength;
     static int _noteIndex;
-    static unsigned long _nextNoteTime;
+    static unsigned long _noteStartTime;
+    static unsigned long _currentWaitDurationMs;
     static bool _isPlaying;
     static bool _isNoteOn;
 };

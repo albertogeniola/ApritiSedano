@@ -4,7 +4,8 @@
 int BuzzerManager::_pin = -1;
 int BuzzerManager::_beepsRemaining = 0;
 bool BuzzerManager::_isBeeping = false;
-unsigned long BuzzerManager::_nextToggleTime = 0;
+unsigned long BuzzerManager::_lastToggleTime = 0;
+unsigned long BuzzerManager::_currentPhaseDurationMs = 0;
 int BuzzerManager::_currentBeepDurationMs = 100;
 int BuzzerManager::_currentSilenceDurationMs = 100;
 #endif
@@ -30,7 +31,8 @@ void BuzzerManager::playOpenSequence() {
     _currentSilenceDurationMs = SILENCE_DURATION_MS;
     _beepsRemaining = 2;
     _isBeeping = true;
-    _nextToggleTime = millis() + _currentBeepDurationMs;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
     if (_pin != -1) digitalWrite(_pin, HIGH);
 #endif
 }
@@ -44,7 +46,8 @@ void BuzzerManager::playCloseSequence() {
     _currentSilenceDurationMs = SILENCE_DURATION_MS;
     _beepsRemaining = 3;
     _isBeeping = true;
-    _nextToggleTime = millis() + _currentBeepDurationMs;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
     if (_pin != -1) digitalWrite(_pin, HIGH);
 #endif
 }
@@ -58,7 +61,8 @@ void BuzzerManager::playErrorSequence() {
     _currentSilenceDurationMs = 500;
     _beepsRemaining = 2;
     _isBeeping = true;
-    _nextToggleTime = millis() + _currentBeepDurationMs;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
     if (_pin != -1) digitalWrite(_pin, HIGH);
 #endif
 }
@@ -72,7 +76,8 @@ void BuzzerManager::playSuccessSequence() {
     _currentSilenceDurationMs = 500;
     _beepsRemaining = 1;
     _isBeeping = true;
-    _nextToggleTime = millis() + _currentBeepDurationMs;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
     if (_pin != -1) digitalWrite(_pin, HIGH);
 #endif
 }
@@ -86,7 +91,8 @@ void BuzzerManager::playAntennaInternalSequence() {
     _currentSilenceDurationMs = 500;
     _beepsRemaining = 1;
     _isBeeping = true;
-    _nextToggleTime = millis() + _currentBeepDurationMs;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
     if (_pin != -1) digitalWrite(_pin, HIGH);
 #endif
 }
@@ -100,7 +106,8 @@ void BuzzerManager::playAntennaExternalSequence() {
     _currentSilenceDurationMs = 300;
     _beepsRemaining = 2;
     _isBeeping = true;
-    _nextToggleTime = millis() + _currentBeepDurationMs;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
     if (_pin != -1) digitalWrite(_pin, HIGH);
 #endif
 }
@@ -114,7 +121,8 @@ void BuzzerManager::playAntennaErrorSequence() {
     _currentSilenceDurationMs = 200;
     _beepsRemaining = 3;
     _isBeeping = true;
-    _nextToggleTime = millis() + _currentBeepDurationMs;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
     if (_pin != -1) digitalWrite(_pin, HIGH);
 #endif
 }
@@ -126,7 +134,7 @@ void BuzzerManager::loop() {
 #else
     if (_pin == -1 || _beepsRemaining <= 0) return;
 
-    if (millis() >= _nextToggleTime) {
+    if (millis() - _lastToggleTime >= _currentPhaseDurationMs) {
         if (_isBeeping) {
             // Fine del beep, inizia il silenzio
             digitalWrite(_pin, LOW);
@@ -134,13 +142,15 @@ void BuzzerManager::loop() {
             _beepsRemaining--;
             
             if (_beepsRemaining > 0) {
-                _nextToggleTime = millis() + _currentSilenceDurationMs;
+                _lastToggleTime = millis();
+                _currentPhaseDurationMs = _currentSilenceDurationMs;
             }
         } else {
             // Fine del silenzio, inizia il nuovo beep
             digitalWrite(_pin, HIGH);
             _isBeeping = true;
-            _nextToggleTime = millis() + _currentBeepDurationMs;
+            _lastToggleTime = millis();
+            _currentPhaseDurationMs = _currentBeepDurationMs;
         }
     }
 #endif

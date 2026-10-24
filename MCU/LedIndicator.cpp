@@ -13,19 +13,29 @@ int LedIndicator::_blinkCount = 0;
 
 void LedIndicator::init(int pin) {
     _pin = pin;
+#if !HW_LED_IS_RGB
+    if (_pin != -1) {
+        pinMode(_pin, OUTPUT);
+    }
+#endif
     setRGB(0, 0, 0); // Spento
 }
 
 void LedIndicator::setRGB(uint8_t r, uint8_t g, uint8_t b) {
     if (_pin == -1) return;
+#if HW_LED_IS_RGB
     // Scala i valori in base alla luminosità (max 255)
     uint8_t scaledR = (r * BRIGHTNESS) / 255;
     uint8_t scaledG = (g * BRIGHTNESS) / 255;
     uint8_t scaledB = (b * BRIGHTNESS) / 255;
     
-#if defined(ESP32)
+    #if defined(ESP32)
     // Utilizza la funzione built-in del core ESP32 (3.x) per i LED WS2812
-    neopixelWrite(_pin, scaledR, scaledG, scaledB);
+    rgbLedWrite(_pin, scaledR, scaledG, scaledB);
+    #endif
+#else
+    bool isOn = (r > 0 || g > 0 || b > 0);
+    digitalWrite(_pin, isOn ? HW_LED_ON_STATE : HW_LED_OFF_STATE);
 #endif
 }
 

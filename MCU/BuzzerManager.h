@@ -33,7 +33,8 @@ private:
     static int _pin;
     static int _beepsRemaining;
     static bool _isBeeping;
-    static unsigned long _nextToggleTime;
+    static unsigned long _lastToggleTime;
+    static unsigned long _currentPhaseDurationMs;
     static int _currentBeepDurationMs;
     static int _currentSilenceDurationMs;
     

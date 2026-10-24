@@ -94,8 +94,11 @@ public class ApritiSedanoService extends Service {
         if (!isSyncAction) {
             long currentTsSeconds = System.currentTimeMillis() / 1000L;
             long remainingSeconds = 30 - (currentTsSeconds % 30);
-            timeout = (remainingSeconds * 1000L) + 500L; // +500ms di margine
-            Log.d(TAG, "Timeout dinamico impostato a " + timeout + " ms (fine validità TOTP)");
+            // Poiché il microcontrollore accetta una tolleranza di +/- 2 finestre (ulteriori 60s),
+            // garantiamo almeno una finestra extra da 30s per evitare timeout prematuri a fine finestra.
+            long effectiveSeconds = remainingSeconds + 30;
+            timeout = (effectiveSeconds * 1000L) + 500L;
+            Log.d(TAG, "Timeout dinamico impostato a " + timeout + " ms");
         }
         
         timeoutHandler.postDelayed(this::stopSelf, timeout);
@@ -104,6 +107,7 @@ public class ApritiSedanoService extends Service {
     }
 
     private String currentTargetMac = null;
+    private boolean currentIsSyncAction = false;
 
     private void startRadioOperations(boolean isSyncAction, String targetMac, String secretKey) {
         if (!checkBluetoothPermissions()) {
@@ -118,6 +122,7 @@ public class ApritiSedanoService extends Service {
         }
 
         this.currentTargetMac = targetMac;
+        this.currentIsSyncAction = isSyncAction;
 
         AdvertiseSettings settings = new AdvertiseSettings.Builder()
                 .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
@@ -220,8 +225,15 @@ public class ApritiSedanoService extends Service {
             if (result.getScanRecord() != null) {
                 byte[] payload = result.getScanRecord().getManufacturerSpecificData(0x02E5);
                 if (payload != null) {
-                    // Ignora i Beacon di stato (binari di 10 byte che iniziano per 0x01, 0x02 o 0x03) per non sporcare i log
                     if (payload.length == 10 && (payload[0] == 0x01 || payload[0] == 0x02 || payload[0] == 0x03)) {
+                        // Se stavamo sincronizzando l'orologio e il dispositivo torna nello stato normale 0x01, la sync è riuscita!
+                        if (currentIsSyncAction && payload[0] == 0x01) {
+                            BoxState syncedState = (payload[1] == 1) ? BoxState.OPEN : BoxState.CLOSED;
+                            Log.d(TAG, "Sincronizzazione orologio completata! Stato box: " + syncedState);
+                            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "TIME_SYNC_OK (Stato: " + syncedState + ")"));
+                            notifyCompletion(syncedState);
+                            stopSelf();
+                        }
                         return;
                     }
 

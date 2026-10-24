@@ -23,6 +23,13 @@ public class ApritiSedanoTileService extends TileService {
     }
 
     private void startOpenerService() {
+        java.util.List<Device> devices = DeviceManager.getDevices(this);
+        if (devices.isEmpty()) {
+            Log.w(TAG, "Nessun dispositivo configurato per il Quick Settings Tile.");
+            return;
+        }
+        Device target = devices.get(0);
+
         // Mostriamo visivamente che il tile sta lavorando
         Tile tile = getQsTile();
         if (tile != null) {
@@ -31,6 +38,8 @@ public class ApritiSedanoTileService extends TileService {
         }
 
         Intent serviceIntent = new Intent(this, ApritiSedanoService.class);
+        serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, target.getMacAddress());
+        serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, target.getSecretKey());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent);
         } else {

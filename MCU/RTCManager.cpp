@@ -44,6 +44,11 @@ bool RTCManager::syncToESP32() {
     tzset();
     
     time_t epoch = mktime(&t);
+    time_t currentEspTime = time(nullptr);
+    if (epoch < 1704067200 && currentEspTime >= 1704067200) {
+        Serial.println("WARNING: DS3231 RTC time is invalid; preserving existing ESP32 system time.");
+        return false;
+    }
     
     // Imposta l'orologio interno dell'ESP32
     struct timeval tv;

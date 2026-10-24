@@ -26,7 +26,8 @@ const int* MelodyPlayer::_currentMelodyNotes = nullptr;
 const int* MelodyPlayer::_currentMelodyDurations = nullptr;
 int MelodyPlayer::_currentMelodyLength = 0;
 int MelodyPlayer::_noteIndex = 0;
-unsigned long MelodyPlayer::_nextNoteTime = 0;
+unsigned long MelodyPlayer::_noteStartTime = 0;
+unsigned long MelodyPlayer::_currentWaitDurationMs = 0;
 bool MelodyPlayer::_isPlaying = false;
 bool MelodyPlayer::_isNoteOn = false;
 
@@ -115,13 +116,14 @@ void MelodyPlayer::play(MelodyType type) {
     _noteIndex = 0;
     _isPlaying = true;
     _isNoteOn = false;
-    _nextNoteTime = millis();
+    _noteStartTime = millis();
+    _currentWaitDurationMs = 0;
 }
 
 void MelodyPlayer::loop() {
     if (!_isPlaying || _pin == -1) return;
     
-    if (millis() >= _nextNoteTime) {
+    if (millis() - _noteStartTime >= _currentWaitDurationMs) {
         if (!_isNoteOn) {
             // Start playing the current note
             int note = _currentMelodyNotes[_noteIndex];
@@ -134,15 +136,14 @@ void MelodyPlayer::loop() {
             }
             
             _isNoteOn = true;
-            // The note lasts for the specified duration. We'll start the next note after this one finishes
-            // (plus a tiny gap if we wanted, but tone() handles its own duration, we just track when to move to the next).
-            // tone() is non-blocking on ESP32, it just stops after duration.
-            // But we must wait for it to finish before starting the next.
-            _nextNoteTime = millis() + duration + 10; // 10ms gap between notes
+            _noteStartTime = millis();
+            _currentWaitDurationMs = (unsigned long)duration + 10; // 10ms gap between notes
         } else {
             // Note finished, move to next
             _isNoteOn = false;
             _noteIndex++;
+            _noteStartTime = millis();
+            _currentWaitDurationMs = 0;
             
             if (_noteIndex >= _currentMelodyLength) {
                 // Melody finished

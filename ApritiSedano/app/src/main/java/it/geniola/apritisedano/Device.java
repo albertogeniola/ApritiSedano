@@ -11,6 +11,7 @@ public class Device {
     // UI State (Not persisted)
     private int currentState = -1; // -1: Unknown, 1: Open, 2: Closed, 3: Syncing, 4: Time Invalid
     private long lastSeen = 0;
+    private long lastBeaconTimestamp = 0;
     private boolean isActionPending = false;
 
     public Device(String macAddress, String name, String secretKey) {
@@ -50,6 +51,14 @@ public class Device {
     
     public long getLastSeen() {
         return lastSeen;
+    }
+
+    public long getLastBeaconTimestamp() {
+        return lastBeaconTimestamp;
+    }
+
+    public void setLastBeaconTimestamp(long lastBeaconTimestamp) {
+        this.lastBeaconTimestamp = lastBeaconTimestamp;
     }
     
     public boolean isActionPending() {
