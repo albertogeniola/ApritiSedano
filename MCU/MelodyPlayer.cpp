@@ -48,6 +48,14 @@ const int errorWrongCodeDurations[] = { 200, 300, 150, 200, 300 };
 const int successNotes[] = { NOTE_C6, NOTE_C7 };
 const int successDurations[] = { 200, 400 };
 
+// Doppio beep breve ogni secondo durante la modalità accoppiamento
+const int pairingTickNotes[] = { NOTE_A6, REST, NOTE_A6 };
+const int pairingTickDurations[] = { 60, 50, 60 };
+
+// Melodia di successo quando un nuovo dispositivo completa l'accoppiamento
+const int pairingCompleteNotes[] = { NOTE_C6, NOTE_E6, NOTE_G6, NOTE_C7, REST, NOTE_G6, NOTE_C7 };
+const int pairingCompleteDurations[] = { 100, 100, 100, 220, 60, 100, 350 };
+
 const int antennaInternalNotes[] = { NOTE_C6 };
 const int antennaInternalDurations[] = { 1500 };
 
@@ -67,7 +75,7 @@ void MelodyPlayer::init(int pin) {
 
 void MelodyPlayer::play(MelodyType type) {
     if (_pin == -1) return;
-    
+
     switch (type) {
         case MelodyType::OPEN:
             _currentMelodyNotes = openNotes;
@@ -94,6 +102,16 @@ void MelodyPlayer::play(MelodyType type) {
             _currentMelodyDurations = successDurations;
             _currentMelodyLength = sizeof(successNotes) / sizeof(successNotes[0]);
             break;
+        case MelodyType::PAIRING_TICK:
+            _currentMelodyNotes = pairingTickNotes;
+            _currentMelodyDurations = pairingTickDurations;
+            _currentMelodyLength = sizeof(pairingTickNotes) / sizeof(pairingTickNotes[0]);
+            break;
+        case MelodyType::PAIRING_COMPLETE:
+            _currentMelodyNotes = pairingCompleteNotes;
+            _currentMelodyDurations = pairingCompleteDurations;
+            _currentMelodyLength = sizeof(pairingCompleteNotes) / sizeof(pairingCompleteNotes[0]);
+            break;
         case MelodyType::ANTENNA_INTERNAL:
             _currentMelodyNotes = antennaInternalNotes;
             _currentMelodyDurations = antennaInternalDurations;
@@ -112,7 +130,7 @@ void MelodyPlayer::play(MelodyType type) {
         default:
             return;
     }
-    
+
     _noteIndex = 0;
     _isPlaying = true;
     _isNoteOn = false;
@@ -122,31 +140,28 @@ void MelodyPlayer::play(MelodyType type) {
 
 void MelodyPlayer::loop() {
     if (!_isPlaying || _pin == -1) return;
-    
+
     if (millis() - _noteStartTime >= _currentWaitDurationMs) {
         if (!_isNoteOn) {
-            // Start playing the current note
             int note = _currentMelodyNotes[_noteIndex];
             int duration = _currentMelodyDurations[_noteIndex];
-            
+
             if (note != REST) {
                 tone(_pin, note, duration);
             } else {
                 noTone(_pin);
             }
-            
+
             _isNoteOn = true;
             _noteStartTime = millis();
-            _currentWaitDurationMs = (unsigned long)duration + 10; // 10ms gap between notes
+            _currentWaitDurationMs = (unsigned long)duration + 10;
         } else {
-            // Note finished, move to next
             _isNoteOn = false;
             _noteIndex++;
             _noteStartTime = millis();
             _currentWaitDurationMs = 0;
-            
+
             if (_noteIndex >= _currentMelodyLength) {
-                // Melody finished
                 _isPlaying = false;
                 noTone(_pin);
             }

@@ -72,49 +72,37 @@ public class DebugActivity extends AppCompatActivity {
     private final ScanCallback stateScanCallback = new ScanCallback() {
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
-            if (result.getScanRecord() != null) {
+            if (result.getScanRecord() != null && result.getDevice() != null) {
                 byte[] payload = result.getScanRecord().getManufacturerSpecificData(0x02E5);
                 String mac = result.getDevice().getAddress();
-                if (payload != null && payload.length >= 1) {
-                    if (payload[0] == 0x01 && payload.length >= 10) {
+                if (payload != null && payload.length >= 2) {
+                    if (payload[0] == 0x01 && payload.length >= 6) {
                         byte state = payload[1];
                         long ts = ((payload[2] & 0xFFL) << 24) |
                                   ((payload[3] & 0xFFL) << 16) |
                                   ((payload[4] & 0xFFL) << 8) |
                                   (payload[5] & 0xFFL);
-                        byte[] hmac = new byte[4];
-                        System.arraycopy(payload, 6, hmac, 0, 4);
 
-                        long currentTs = System.currentTimeMillis() / 1000L;
-                        if (Math.abs(currentTs - ts) > 300) {
-                            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon Scartato (Deriva > 5m)"));
-                            runOnUiThread(() -> updateList());
-                            return;
-                        }
-                        if (ts <= lastReceivedTimestamp) return; // Ignore replays to avoid spam
+                        if (ts != 0 && ts == lastReceivedTimestamp) return;
+                        lastReceivedTimestamp = ts;
 
                         Device device = DeviceManager.getDeviceByMac(DebugActivity.this, mac);
-                        if (device != null) {
-                            if (TOTPGenerator.verifyStateBeacon(device.getSecretKey(), state, (int)ts, hmac)) {
-                                lastReceivedTimestamp = ts;
-                                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX [" + device.getName() + "]: " + (state == 1 ? "APERTO" : "CHIUSO") + " (ts: " + ts + ")"));
-                                runOnUiThread(() -> {
-                                    updateList();
-                                });
-                            }
-                        } else {
-                            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX da dispositivo sconosciuto: " + mac));
-                        }
-                    } else if (payload[0] == 0x02) {
-                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX: Orologio Scarico"));
-                        runOnUiThread(() -> {
-                            updateList();
-                        });
-                    } else if (payload[0] == 0x03) {
-                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Beacon RX: Sincronizzazione in corso"));
-                        runOnUiThread(() -> {
-                            updateList();
-                        });
+                        String label = (device != null) ? device.getName() : mac;
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(
+                                System.currentTimeMillis(),
+                                false,
+                                "",
+                                "Beacon RX [" + label + "]: " + (state == 1 ? "APERTO" : "CHIUSO") + " (ts: " + ts + ")"
+                        ));
+                        runOnUiThread(() -> updateList());
+                    } else if (payload[0] == 0x04) {
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(
+                                System.currentTimeMillis(),
+                                false,
+                                "",
+                                "Beacon RX [" + mac + "]: MODALITÀ ACCOPPIAMENTO ATTIVA"
+                        ));
+                        runOnUiThread(() -> updateList());
                     }
                 }
             }

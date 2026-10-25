@@ -19,7 +19,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical">
-            
+
             <ImageView
                 android:layout_width="40dp"
                 android:layout_height="40dp"
@@ -67,7 +67,7 @@
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:layout_marginTop="16dp">
-            
+
             <TextView
                 android:id="@+id/tv_device_state"
                 android:layout_width="0dp"

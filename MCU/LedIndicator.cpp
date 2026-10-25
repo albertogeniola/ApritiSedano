@@ -80,6 +80,9 @@ void LedIndicator::setState(LedState state) {
         case LED_HEARTBEAT:
             setRGB(0, 255, 0); // Verde per l'heartbeat
             break;
+        case LED_PAIRING:
+            setRGB(0, 180, 255); // Ciano/Blu per modalità accoppiamento
+            break;
     }
 }
 
@@ -178,6 +181,16 @@ void LedIndicator::loop() {
             // Una singola pulsazione verde di 400ms per la diagnostica
             if (now - _stateStartTime >= 400) {
                 setState(LED_IDLE); // Torna allo stato di default
+            }
+            break;
+
+        case LED_PAIRING:
+            // Lampeggio Ciano/Blu (300ms ON / 300ms OFF)
+            if (now - _lastToggleTime >= 300) {
+                _ledOn = !_ledOn;
+                if (_ledOn) setRGB(0, 180, 255);
+                else setRGB(0, 0, 0);
+                _lastToggleTime = now;
             }
             break;
     }

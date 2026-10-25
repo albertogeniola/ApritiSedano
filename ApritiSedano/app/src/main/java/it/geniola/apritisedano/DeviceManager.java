@@ -7,7 +7,6 @@ import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKey;
 
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
@@ -33,7 +32,7 @@ public class DeviceManager {
         );
     }
 
-    public static List<Device> getDevices(Context context) {
+    public static synchronized List<Device> getDevices(Context context) {
         List<Device> devices = new ArrayList<>();
         try {
             SharedPreferences prefs = getEncryptedSharedPreferences(context);
@@ -49,7 +48,7 @@ public class DeviceManager {
         return devices;
     }
 
-    public static void saveDevices(Context context, List<Device> devices) {
+    public static synchronized void saveDevices(Context context, List<Device> devices) {
         try {
             JSONArray jsonArray = new JSONArray();
             for (Device d : devices) {
@@ -62,21 +61,21 @@ public class DeviceManager {
         }
     }
 
-    public static void addDevice(Context context, Device device) {
+    public static synchronized void addDevice(Context context, Device device) {
         List<Device> devices = getDevices(context);
-        // Remove if exists with same MAC to update it
         devices.removeIf(d -> d.getMacAddress().equalsIgnoreCase(device.getMacAddress()));
         devices.add(device);
         saveDevices(context, devices);
     }
 
-    public static void removeDevice(Context context, String macAddress) {
+    public static synchronized void removeDevice(Context context, String macAddress) {
         List<Device> devices = getDevices(context);
         devices.removeIf(d -> d.getMacAddress().equalsIgnoreCase(macAddress));
         saveDevices(context, devices);
     }
 
-    public static Device getDeviceByMac(Context context, String macAddress) {
+    public static synchronized Device getDeviceByMac(Context context, String macAddress) {
+        if (macAddress == null) return null;
         List<Device> devices = getDevices(context);
         for (Device d : devices) {
             if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
@@ -84,5 +83,23 @@ public class DeviceManager {
             }
         }
         return null;
+    }
+
+    /**
+     * Increments the rolling code counter for the given device MAC and persists it immediately.
+     * @return The new incremented counter value, or -1 if device not found.
+     */
+    public static synchronized long incrementAndGetCounter(Context context, String macAddress) {
+        if (macAddress == null) return -1;
+        List<Device> devices = getDevices(context);
+        for (Device d : devices) {
+            if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
+                long nextCounter = d.getCounter() + 1L;
+                d.setCounter(nextCounter);
+                saveDevices(context, devices);
+                return nextCounter;
+            }
+        }
+        return -1;
     }
 }

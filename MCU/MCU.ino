@@ -7,7 +7,7 @@
 #include "RTCManager.h"
 #include "BuzzerManager.h"
 #include "Logger.h"
-#include "TotpValidator.h"
+#include "RollingCodeManager.h"
 #include "AntennaManager.h"
 #include <time.h>
 
@@ -40,47 +40,47 @@ static void getItalyLocalTime(time_t utcNow, struct tm* outItalyTm) {
 
 void setup() {
     Serial.begin(115200);
-    
+
     // Inizializza controllo antenna (interna/esterna)
     AntennaManager::init();
 
     // OTTIMIZZAZIONE ENERGETICA: Spegniamo il modulo WiFi dato che il sistema è 100% offline
     WiFi.mode(WIFI_OFF);
-    
+
     // OTTIMIZZAZIONE ENERGETICA: Riduciamo la frequenza della CPU a 80MHz per abbattere i consumi (da ~130mA a ~90mA)
     setCpuFrequencyMhz(80);
-    
+
     // Inizializza feedback visivo usando le costanti definite in HardwareConfig.h
     LedIndicator::init(HW_LED_PIN);
     LedIndicator::setState(LED_IDLE);
 
-    // Inizializza Modulo RTC DS3231 e sincronizza l'orologio interno dell'ESP32
+    // Inizializza Modulo RTC DS3231 e sincronizza l'orologio interno dell'ESP32 (per log e riavvio delle 03:00)
     if (RTCManager::init(HW_I2C_SDA, HW_I2C_SCL)) {
         RTCManager::syncToESP32();
     }
 
-    // Initialize Preferences and load TOTP secret
+    // Carica gli smartphone associati (Rolling Code) da NVS
     ConfigCLI::init();
-    
+
     // Initialize BLE handler with the pins from HardwareConfig.h
     BleHandler::init(HW_RELAY_PIN, HW_SENSOR_PIN);
-    
+
     // Inizializzazione Buzzer
     BuzzerManager::init(HW_BUZZER_PIN);
-    
+
     // Inizializza Sistema di Logging Locale
     Logger::init();
-    
-    Serial.println("ApritiSedano System Booted. Waiting for BLE TOTP.");
-    
+
+    Serial.println("ApritiSedano System Booted. Waiting for BLE Rolling Code.");
+
     struct tm timeinfo;
     if (getLocalTime(&timeinfo, 100)) {
         Serial.println(&timeinfo, "Current Time (UTC): %A, %B %d %Y %H:%M:%S");
     } else {
-        Serial.println("Current Time: Not synchronized (use 'conf' to sync via NTP).");
+        Serial.println("Current Time: Not synchronized (use 'conf' or App to sync RTC for logs/daily reboot).");
     }
-    
-    Serial.println("Type 'conf' and press Enter to access configuration menu.");
+
+    Serial.println("Hold button for 3s to enter BLE Pairing Mode, or type 'conf' and press Enter for CLI menu.");
 }
 
 void loop() {
@@ -90,28 +90,28 @@ void loop() {
     // Buzzer Asynchronous Update
     BuzzerManager::loop();
 
-    // BLE background tasks (es. timeout dell'ACK)
+    // BLE background tasks
     BleHandler::loop();
-    
+
     // Aggiornamento stato base del LED
     LedState currentState = LedIndicator::getState();
-    if (currentState == LED_IDLE || currentState == LED_OUT_OF_SYNC || currentState == LED_UNCONFIGURED) {
-        if (BleHandler::isTimeInvalid()) {
-            LedIndicator::setState(LED_OUT_OF_SYNC);
-        } else if (!TotpValidator::hasSecret()) {
+    if (currentState == LED_IDLE || currentState == LED_UNCONFIGURED || currentState == LED_PAIRING) {
+        if (BleHandler::isPairingMode()) {
+            LedIndicator::setState(LED_PAIRING);
+        } else if (!RollingCodeManager::hasAnyClient()) {
             LedIndicator::setState(LED_UNCONFIGURED);
         } else {
             LedIndicator::setState(LED_IDLE);
         }
     }
-    
+
     // Riavvio giornaliero programmato alle 03:00 (ora italiana CET/CEST) per prevenire accumuli di memoria.
     // Richiede almeno 10 minuti di uptime (600.000 ms) per evitare loop di riavvio nella finestra 03:00-03:04.
     static unsigned long lastRebootCheckMs = 0;
     unsigned long nowMs = millis();
     if (nowMs >= 600000UL && (nowMs - lastRebootCheckMs >= 1000UL)) {
         lastRebootCheckMs = nowMs;
-        if (!BleHandler::isTimeInvalid() && !BleHandler::isBusy()) {
+        if (!BleHandler::isBusy()) {
             time_t utcNow = time(nullptr);
             if (utcNow >= 1704067200) {
                 struct tm italyTm;
@@ -132,18 +132,20 @@ void loop() {
         if (c == '\n' || c == '\r') {
             if (serialInput == "conf") {
                 Serial.println("Configuration Mode Requested.");
-                LedIndicator::setState(LED_CONFIG); // Fast blinking for config
+                LedIndicator::setState(LED_CONFIG);
                 BleHandler::pause();
                 ConfigCLI::handle();
                 BleHandler::resume();
-                LedIndicator::setState(LED_IDLE);   // Back to idle
+                if (!BleHandler::isPairingMode()) {
+                    LedIndicator::setState(LED_IDLE);
+                }
             }
-            serialInput = ""; // Clear input after processing
+            serialInput = "";
         } else if (serialInput.length() < 32) {
             serialInput += c;
         }
     }
-    
+
     // OTTIMIZZAZIONE ENERGETICA: Evitiamo che il loop occupi il 100% della CPU, lasciando respirare RTOS
     delay(10);
 }

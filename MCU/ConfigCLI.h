@@ -7,11 +7,10 @@ class ConfigCLI {
 public:
     static void init();
     static void handle();
-    static void loadSecret();
 private:
     static void showMenu();
     static void syncNTP();
-    static void setSecret();
+    static void managePairedClients();
     static String readString();
 };
 

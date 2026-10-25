@@ -1,12 +1,25 @@
 #pragma once
 
 // ==========================================
-// SELEZIONE SCHEDA HARDWARE
-// Rimuovi il commento (//) SOLO sulla scheda che stai per programmare.
+// SELEZIONE SCHEDA HARDWARE (AUTO-DETECT + MANUALE)
+// Seleziona automaticamente la scheda corretta in base al target scelto nell'IDE
+// (Seeed Studio XIAO ESP32C6 oppure ESP32-WROOM-32), con possibilità di scelta manuale.
 // ==========================================
 
-#define BOARD_XIAO_ESP32C6
-//#define BOARD_ESP32_WROOM32
+#if defined(CONFIG_IDF_TARGET_ESP32C6) || defined(ARDUINO_XIAO_ESP32C6)
+    #undef BOARD_ESP32_WROOM32
+    #ifndef BOARD_XIAO_ESP32C6
+    #define BOARD_XIAO_ESP32C6
+    #endif
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+    #undef BOARD_XIAO_ESP32C6
+    #ifndef BOARD_ESP32_WROOM32
+    #define BOARD_ESP32_WROOM32
+    #endif
+#else
+    #define BOARD_XIAO_ESP32C6
+    //#define BOARD_ESP32_WROOM32
+#endif
 
 // ==========================================
 // CONFIGURAZIONE BUZZER
@@ -84,8 +97,6 @@
     // ESP32-WROOM standard non supporta lo switch software dell'antenna
     #define HW_SUPPORTS_EXTERNAL_ANTENNA false
 
-
 #else
     #error "Nessuna scheda hardware selezionata in HardwareConfig.h! De-commenta una delle schede in alto."
 #endif
-

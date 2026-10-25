@@ -1,7 +1,6 @@
 package it.geniola.apritisedano;
 
 import android.graphics.Color;
-import android.os.CountDownTimer;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -13,6 +12,7 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.List;
+import java.util.Locale;
 
 public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceViewHolder> {
 
@@ -23,7 +23,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
     public interface OnDeviceClickListener {
         void onDeviceActionClick(Device device);
     }
-    
+
     public interface OnDeviceSettingsClickListener {
         void onSettingsClick(Device device);
     }
@@ -38,7 +38,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
         this.deviceList = newDevices;
         notifyDataSetChanged();
     }
-    
+
     public void updateDeviceState(String macAddress, int state) {
         for (int i = 0; i < deviceList.size(); i++) {
             Device d = deviceList.get(i);
@@ -48,6 +48,29 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
                     notifyItemChanged(i);
                 }
                 return;
+            }
+        }
+    }
+
+    public void startDevicePairingCountdown(String macAddress, int seconds) {
+        for (int i = 0; i < deviceList.size(); i++) {
+            Device d = deviceList.get(i);
+            if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
+                d.startPairingCountdown(seconds);
+                notifyItemChanged(i);
+                return;
+            }
+        }
+    }
+
+    public void tickPairingCountdowns() {
+        for (int i = 0; i < deviceList.size(); i++) {
+            Device d = deviceList.get(i);
+            if (d.getCurrentState() == 5) {
+                if (d.getRemainingPairingSeconds() <= 0) {
+                    d.setCurrentState(-1);
+                }
+                notifyItemChanged(i);
             }
         }
     }
@@ -76,36 +99,28 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
         holder.tvDeviceName.setText(device.getName());
         holder.tvDeviceMac.setText(device.getMacAddress());
 
-        // Handling state
         if (device.getCurrentState() == 1) {
             holder.tvDeviceState.setText("Stato: APERTO");
             holder.tvDeviceState.setTextColor(Color.parseColor("#4CAF50"));
         } else if (device.getCurrentState() == 2) {
             holder.tvDeviceState.setText("Stato: CHIUSO");
             holder.tvDeviceState.setTextColor(Color.parseColor("#F44336"));
-        } else if (device.getCurrentState() == 4) {
-            holder.tvDeviceState.setText("OROLOGIO SCARICO");
-            holder.tvDeviceState.setTextColor(Color.parseColor("#FF9800"));
-        } else if (device.getCurrentState() == 3) {
-            holder.tvDeviceState.setText("SYNC IN CORSO");
-            holder.tvDeviceState.setTextColor(Color.parseColor("#2196F3"));
+        } else if (device.getCurrentState() == 5) {
+            int remSec = Math.max(1, device.getRemainingPairingSeconds());
+            holder.tvDeviceState.setText(String.format(Locale.US, "IN ACCOPPIAMENTO (%ds)", remSec));
+            holder.tvDeviceState.setTextColor(Color.parseColor("#00BCD4"));
         } else {
             holder.tvDeviceState.setText("RICERCA IN CORSO...");
             holder.tvDeviceState.setTextColor(Color.parseColor("#9E9E9E"));
         }
-        
-        // Handling Action Button
+
         if (device.isActionPending()) {
             holder.btnAction.setEnabled(false);
             holder.btnAction.setText("ATTENDI...");
         } else {
-            long currentWindow = System.currentTimeMillis() / 1000L / 30;
-            // Simplified TOTP lockout logic for UI, for now just allow clicking
             holder.btnAction.setEnabled(true);
             if (device.getCurrentState() == 1) {
                 holder.btnAction.setText("CHIUDI");
-            } else if (device.getCurrentState() == 4 || device.getCurrentState() == 3) {
-                holder.btnAction.setText("SYNC");
             } else {
                 holder.btnAction.setText("APRI");
             }
@@ -116,7 +131,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
                 listener.onDeviceActionClick(device);
             }
         });
-        
+
         holder.ivSettings.setOnClickListener(v -> {
             if (settingsListener != null) {
                 settingsListener.onSettingsClick(device);

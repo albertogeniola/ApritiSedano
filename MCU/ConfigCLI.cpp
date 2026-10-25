@@ -1,9 +1,7 @@
 #include "ConfigCLI.h"
-#include "TotpValidator.h"
+#include "RollingCodeManager.h"
 #include "BleHandler.h"
 #include <WiFi.h>
-#include <Preferences.h>
-#include <mbedtls/base64.h>
 #include <sys/time.h>
 #include "RTCManager.h"
 #include "esp_system.h"
@@ -17,53 +15,7 @@
 #include "AntennaManager.h"
 
 void ConfigCLI::init() {
-    loadSecret();
-}
-
-static const char* b32chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-
-static int decodeBase32Char(char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a';
-    if (c >= '2' && c <= '7') return c - '2' + 26;
-    return -1;
-}
-
-static size_t decodeBase32(const char* input, uint8_t* output) {
-    int buffer = 0;
-    int bitsLeft = 0;
-    size_t count = 0;
-    for (const char* ptr = input; *ptr; ++ptr) {
-        if (*ptr == '=' || *ptr == ' ' || *ptr == '-') continue;
-        int val = decodeBase32Char(*ptr);
-        if (val < 0) return 0; // error
-        buffer = (buffer << 5) | val;
-        bitsLeft += 5;
-        if (bitsLeft >= 8) {
-            output[count++] = (uint8_t)(buffer >> (bitsLeft - 8));
-            bitsLeft -= 8;
-        }
-    }
-    return count;
-}
-
-void ConfigCLI::loadSecret() {
-    Preferences preferences;
-    if (!preferences.begin("apritisedano", true)) {
-        Serial.println("No TOTP secret found in NVS.");
-        return;
-    }
-    size_t len = preferences.getBytesLength("totp_sec");
-    if (len > 0) {
-        uint8_t* buffer = new uint8_t[len];
-        preferences.getBytes("totp_sec", buffer, len);
-        TotpValidator::init(buffer, len);
-        Serial.printf("TOTP secret loaded from NVS (%u bytes).\n", (unsigned int)len);
-        delete[] buffer;
-    } else {
-        Serial.println("No TOTP secret found in NVS.");
-    }
-    preferences.end();
+    RollingCodeManager::init();
 }
 
 String ConfigCLI::readString() {
@@ -87,14 +39,15 @@ String ConfigCLI::readString() {
 void ConfigCLI::showMenu() {
     Serial.println("\n--- MENU DI CONFIGURAZIONE ---");
     Serial.println("1. Sincronizza orologio via Wi-Fi (NTP)");
-    Serial.println("2. Imposta PassPhrase/Secret TOTP (Base32)");
-    Serial.println("3. Aggiorna orologio di sistema manualmente (Timestamp)");
+    Serial.println("2. Attiva Modalità Accoppiamento BLE (60s per nuovo smartphone)");
+    Serial.println("3. Aggiorna orologio RTC manualmente (Timestamp)");
     Serial.println("4. Esci dal menu e avvia sistema");
     Serial.println("5. Riavvia in modalità BOOTLOADER (per flash firmware)");
     Serial.println("6. Leggi lo storico delle operazioni (Logs)");
     Serial.println("7. Svuota lo storico delle operazioni (Clear Logs)");
     Serial.println("8. Mostra informazioni di sistema e memoria (SysInfo)");
     Serial.println("9. Commuta Antenna (Interna / Esterna)");
+    Serial.println("10. Gestisci Smartphone Associati (Lista / Rimuovi / Reset)");
     Serial.print("Scelta: ");
 }
 
@@ -131,14 +84,14 @@ void ConfigCLI::syncNTP() {
 
     Serial.print("Enter password (leave empty if open): ");
     String pwd = readString();
-    
+
     Serial.printf("Connecting to %s...\n", selectedSSID.c_str());
     if (pwd.length() > 0) {
         WiFi.begin(selectedSSID.c_str(), pwd.c_str());
     } else {
         WiFi.begin(selectedSSID.c_str());
     }
-    
+
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 20) {
         delay(500);
@@ -152,48 +105,48 @@ void ConfigCLI::syncNTP() {
     }
     Serial.println("\nConnected! Syncing NTP...");
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-    
+
     struct tm timeinfo;
-    if(!getLocalTime(&timeinfo, 10000)){
+    if (!getLocalTime(&timeinfo, 10000)) {
         Serial.println("Failed to obtain time.");
     } else {
         Serial.println("Time synchronized successfully!");
         Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-        
-        // Salva nel modulo RTC e aggiorna stato validità orario BLE
+
         time_t now;
         time(&now);
         RTCManager::setRTC(now);
-        BleHandler::onTimeUpdated();
     }
     shutdownWiFi();
 }
 
-void ConfigCLI::setSecret() {
-    Serial.print("\nEnter TOTP Secret in Base32: ");
-    String b32 = readString();
-    b32.toUpperCase(); // Ensure it's uppercase for decoding
-    
-    // Max size of decoded is roughly length * 5 / 8
-    size_t maxLen = (b32.length() * 5) / 8 + 1;
-    uint8_t* decoded = new uint8_t[maxLen];
-    
-    size_t actualLen = decodeBase32(b32.c_str(), decoded);
-    
-    if (actualLen > 0) {
-        Preferences preferences;
-        if (preferences.begin("apritisedano", false)) {
-            preferences.putBytes("totp_sec", decoded, actualLen);
-            preferences.end();
-            TotpValidator::init(decoded, actualLen);
-            Serial.println("Secret successfully saved and loaded.");
-        } else {
-            Serial.println("Failed to open NVS storage.");
-        }
+void ConfigCLI::managePairedClients() {
+    RollingCodeManager::printClients();
+    Serial.println("\nOpzioni gestione smartphone:");
+    Serial.println("  [0..15] Rimuovi lo smartphone nello slot specificato");
+    Serial.println("  [ALL]   Cancella TUTTI gli smartphone associati");
+    Serial.println("  [Q]     Torna al menu principale");
+    Serial.print("Scelta: ");
+    String cmd = readString();
+    cmd.trim();
+    cmd.toUpperCase();
+    if (cmd == "Q") {
+        return;
+    } else if (cmd == "ALL") {
+        RollingCodeManager::clearAllClients();
     } else {
-        Serial.println("Failed to decode Base32. Invalid string.");
+        char* endPtr = nullptr;
+        long slot = strtol(cmd.c_str(), &endPtr, 10);
+        if (endPtr != cmd.c_str() && *endPtr == '\0' && slot >= 0 && slot < RC_MAX_CLIENTS) {
+            if (RollingCodeManager::removeClientBySlot((int)slot)) {
+                Serial.printf("Slot %ld rimosso con successo.\n", slot);
+            } else {
+                Serial.printf("Slot %ld è già vuoto.\n", slot);
+            }
+        } else {
+            Serial.println("Scelta non valida.");
+        }
     }
-    delete[] decoded;
 }
 
 void ConfigCLI::handle() {
@@ -205,18 +158,19 @@ void ConfigCLI::handle() {
         if (choice == "1") {
             syncNTP();
         } else if (choice == "2") {
-            setSecret();
+            Serial.println("Uscita dal menu e avvio Modalità Accoppiamento BLE per 60 secondi...");
+            BleHandler::enterPairingMode();
+            exitMenu = true;
         } else if (choice == "3") {
             Serial.print("Enter Unix Timestamp: ");
             String tsStr = readString();
-            time_t epoch = (time_t) strtoull(tsStr.c_str(), nullptr, 10);
+            time_t epoch = (time_t)strtoull(tsStr.c_str(), nullptr, 10);
             if (epoch > 0) {
                 struct timeval tv;
                 tv.tv_sec = epoch;
                 tv.tv_usec = 0;
                 settimeofday(&tv, NULL);
                 RTCManager::setRTC(epoch);
-                BleHandler::onTimeUpdated();
                 Serial.println("Manual Time and RTC updated successfully.");
             } else {
                 Serial.println("Invalid timestamp.");
@@ -229,13 +183,11 @@ void ConfigCLI::handle() {
             Serial.flush();
             delay(500);
 
-            // Scrittura del flag nel registro hardware per forzare il Download Mode al prossimo riavvio
 #if CONFIG_IDF_TARGET_ESP32C6
             REG_WRITE(LP_AON_SYS_CFG_REG, LP_AON_FORCE_DOWNLOAD_BOOT);
 #elif defined(RTC_CNTL_OPTION1_REG) && defined(RTC_CNTL_FORCE_DOWNLOAD_BOOT)
             REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
 #endif
-            // Riavvio
             esp_restart();
         } else if (choice == "6") {
             Logger::printLogs();
@@ -250,6 +202,8 @@ void ConfigCLI::handle() {
             } else {
                 Serial.println("Questa scheda non supporta la commutazione dell'antenna.");
             }
+        } else if (choice == "10") {
+            managePairedClients();
         } else {
             Serial.println("Invalid choice.");
         }

@@ -17,7 +17,7 @@ void BuzzerManager::init(int pin) {
     _pin = pin;
     if (_pin != -1) {
         pinMode(_pin, OUTPUT);
-        digitalWrite(_pin, LOW); // Assumiamo active HIGH per il buzzer semplice
+        digitalWrite(_pin, LOW);
     }
 #endif
 }
@@ -82,6 +82,35 @@ void BuzzerManager::playSuccessSequence() {
 #endif
 }
 
+void BuzzerManager::playPairingTickSequence() {
+#ifdef USE_PASSIVE_BUZZER
+    MelodyPlayer::play(MelodyType::PAIRING_TICK);
+#else
+    if (_beepsRemaining > 0) return;
+    _currentBeepDurationMs = 60;
+    _currentSilenceDurationMs = 50;
+    _beepsRemaining = 2;
+    _isBeeping = true;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
+    if (_pin != -1) digitalWrite(_pin, HIGH);
+#endif
+}
+
+void BuzzerManager::playPairingCompleteSequence() {
+#ifdef USE_PASSIVE_BUZZER
+    MelodyPlayer::play(MelodyType::PAIRING_COMPLETE);
+#else
+    _currentBeepDurationMs = 150;
+    _currentSilenceDurationMs = 80;
+    _beepsRemaining = 3;
+    _isBeeping = true;
+    _lastToggleTime = millis();
+    _currentPhaseDurationMs = _currentBeepDurationMs;
+    if (_pin != -1) digitalWrite(_pin, HIGH);
+#endif
+}
+
 void BuzzerManager::playAntennaInternalSequence() {
 #ifdef USE_PASSIVE_BUZZER
     MelodyPlayer::play(MelodyType::ANTENNA_INTERNAL);
@@ -127,7 +156,6 @@ void BuzzerManager::playAntennaErrorSequence() {
 #endif
 }
 
-
 void BuzzerManager::loop() {
 #ifdef USE_PASSIVE_BUZZER
     MelodyPlayer::loop();
@@ -136,17 +164,15 @@ void BuzzerManager::loop() {
 
     if (millis() - _lastToggleTime >= _currentPhaseDurationMs) {
         if (_isBeeping) {
-            // Fine del beep, inizia il silenzio
             digitalWrite(_pin, LOW);
             _isBeeping = false;
             _beepsRemaining--;
-            
+
             if (_beepsRemaining > 0) {
                 _lastToggleTime = millis();
                 _currentPhaseDurationMs = _currentSilenceDurationMs;
             }
         } else {
-            // Fine del silenzio, inizia il nuovo beep
             digitalWrite(_pin, HIGH);
             _isBeeping = true;
             _lastToggleTime = millis();

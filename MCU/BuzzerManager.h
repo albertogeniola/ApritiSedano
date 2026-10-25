@@ -6,23 +6,28 @@
 #include "MelodyPlayer.h"
 #endif
 
-
 class BuzzerManager {
 public:
     static void init(int pin);
     static void loop();
-    
+
     // Suona 2 beep ravvicinati per l'apertura
     static void playOpenSequence();
-    
+
     // Suona 3 beep ravvicinati per la chiusura
     static void playCloseSequence();
-    
-    // Suona 2 beep lunghi (2s ciascuno) per errore (orario non sincronizzato)
+
+    // Suona 2 beep lunghi per errore
     static void playErrorSequence();
-    
-    // Suona 1 beep lungo (2s) per successo (sincronizzazione avvenuta)
+
+    // Suona 1 beep per successo (es. sincronizzazione orologio)
     static void playSuccessSequence();
+
+    // Suona un doppio beep breve ogni secondo durante la modalità accoppiamento
+    static void playPairingTickSequence();
+
+    // Suona la melodia di conferma quando un nuovo dispositivo viene associato
+    static void playPairingCompleteSequence();
 
     // Sequenze audio per configurazione antenna
     static void playAntennaInternalSequence(); // 1 beep lungo
@@ -37,7 +42,7 @@ private:
     static unsigned long _currentPhaseDurationMs;
     static int _currentBeepDurationMs;
     static int _currentSilenceDurationMs;
-    
+
     static const int BEEP_DURATION_MS = 100;
     static const int SILENCE_DURATION_MS = 100;
 };

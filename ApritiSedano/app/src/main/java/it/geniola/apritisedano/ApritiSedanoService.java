@@ -32,40 +32,59 @@ import androidx.core.content.ContextCompat;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
-import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
- * Foreground Service "Faro ed Eco" per gestione BLE asincrona.
+ * Foreground Service connectionless BLE ("Faro ed Eco") con Rolling-Code (Counter-based OTP).
  */
 public class ApritiSedanoService extends Service {
     private static final String TAG = "ApritiSedanoService";
+
     public static final String ACTION_SERVICE_STOPPED = "it.geniola.apritisedano.SERVICE_STOPPED";
     public static final String ACTION_OPERATION_RESULT = "it.geniola.apritisedano.ACTION_OPERATION_RESULT";
+
+    public static final String ACTION_TRIGGER = "ACTION_TRIGGER";
+    public static final String ACTION_PAIR_NEW_DEVICE = "ACTION_PAIR_NEW_DEVICE";
+    public static final String ACTION_ENABLE_REMOTE_PAIRING = "ACTION_ENABLE_REMOTE_PAIRING";
+    public static final String ACTION_SYNC_TIME = "ACTION_SYNC_TIME";
+
     public static final String EXTRA_BOX_STATE = "it.geniola.apritisedano.EXTRA_BOX_STATE";
     public static final String EXTRA_TARGET_MAC = "it.geniola.apritisedano.EXTRA_TARGET_MAC";
     public static final String EXTRA_SECRET_KEY = "it.geniola.apritisedano.EXTRA_SECRET_KEY";
+    public static final String EXTRA_CLIENT_ID = "it.geniola.apritisedano.EXTRA_CLIENT_ID";
+    public static final String EXTRA_DEVICE_NAME = "it.geniola.apritisedano.EXTRA_DEVICE_NAME";
+
     private static final String CHANNEL_ID = "ApritiSedanoChannel";
     private static final int NOTIFICATION_ID = 101;
-    private static final long TIMEOUT_MS = 60000; // 1 minuto
-    
-    // UUID esempio del microcontrollore
+    private static final long COMMAND_TIMEOUT_MS = 5000L; // 5 secondi per trigger/comandi rolling code
+    private static final long PAIRING_TIMEOUT_MS = 8000L; // 8 secondi per registrazione nuovo seed
+
     private static final UUID TARGET_SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0");
 
     private BluetoothLeAdvertiser advertiser;
     private BluetoothLeScanner scanner;
     private final Handler timeoutHandler = new Handler(Looper.getMainLooper());
 
+    private String currentTargetMac = null;
+    private String currentAction = null;
+    private String currentSecretKey = null;
+    private String currentDeviceName = null;
+    private int currentClientId = 0;
+    private boolean operationCompleted = false;
+
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        
+
         BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
-        BluetoothAdapter adapter = manager.getAdapter();
-        if (adapter != null) {
-            advertiser = adapter.getBluetoothLeAdvertiser();
-            scanner = adapter.getBluetoothLeScanner();
+        if (manager != null) {
+            BluetoothAdapter adapter = manager.getAdapter();
+            if (adapter != null) {
+                advertiser = adapter.getBluetoothLeAdvertiser();
+                scanner = adapter.getBluetoothLeScanner();
+            }
         }
     }
 
@@ -73,110 +92,124 @@ public class ApritiSedanoService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.notification_title)));
 
-        // Annulla eventuali timeout pendenti (es. da una precedente operazione di sync)
         timeoutHandler.removeCallbacksAndMessages(null);
 
-        // Ferma le trasmissioni precedenti se il servizio era già attivo
         if (advertiser != null) {
-            try { advertiser.stopAdvertising(advertiseCallback); } catch (Exception e) {}
+            try { advertiser.stopAdvertising(advertiseCallback); } catch (Exception ignored) {}
         }
         if (scanner != null) {
-            try { scanner.stopScan(scanCallback); } catch (Exception e) {}
+            try { scanner.stopScan(scanCallback); } catch (Exception ignored) {}
         }
 
-        boolean isSyncAction = intent != null && "ACTION_SYNC_TIME".equals(intent.getAction());
+        operationCompleted = false;
+        String action = (intent != null && intent.getAction() != null) ? intent.getAction() : ACTION_TRIGGER;
         String targetMac = intent != null ? intent.getStringExtra(EXTRA_TARGET_MAC) : null;
         String secretKey = intent != null ? intent.getStringExtra(EXTRA_SECRET_KEY) : null;
-        
-        startRadioOperations(isSyncAction, targetMac, secretKey);
-        
-        long timeout = TIMEOUT_MS; // Default per sincronizzazione
-        if (!isSyncAction) {
-            long currentTsSeconds = System.currentTimeMillis() / 1000L;
-            long remainingSeconds = 30 - (currentTsSeconds % 30);
-            // Poiché il microcontrollore accetta una tolleranza di +/- 2 finestre (ulteriori 60s),
-            // garantiamo almeno una finestra extra da 30s per evitare timeout prematuri a fine finestra.
-            long effectiveSeconds = remainingSeconds + 30;
-            timeout = (effectiveSeconds * 1000L) + 500L;
-            Log.d(TAG, "Timeout dinamico impostato a " + timeout + " ms");
-        }
-        
-        timeoutHandler.postDelayed(this::stopSelf, timeout);
-        
+        int clientId = intent != null ? intent.getIntExtra(EXTRA_CLIENT_ID, 0) : 0;
+        String deviceName = intent != null ? intent.getStringExtra(EXTRA_DEVICE_NAME) : null;
+
+        startRadioOperations(action, targetMac, secretKey, clientId, deviceName);
+
+        long timeout = ACTION_PAIR_NEW_DEVICE.equals(action) ? PAIRING_TIMEOUT_MS : COMMAND_TIMEOUT_MS;
+        timeoutHandler.postDelayed(() -> {
+            if (!operationCompleted) {
+                notifyCompletion("TIMEOUT");
+                stopSelf();
+            }
+        }, timeout);
+
         return START_NOT_STICKY;
     }
 
-    private String currentTargetMac = null;
-    private boolean currentIsSyncAction = false;
-
-    private void startRadioOperations(boolean isSyncAction, String targetMac, String secretKey) {
+    private void startRadioOperations(String action, String targetMac, String secretKey, int clientId, String deviceName) {
         if (!checkBluetoothPermissions()) {
-            notifyCompletion(null);
+            notifyCompletion("NACK_ERR");
             stopSelf();
             return;
         }
 
-        if (advertiser == null || scanner == null || targetMac == null || secretKey == null) {
+        if (advertiser == null || scanner == null || targetMac == null) {
+            notifyCompletion("NACK_ERR");
             stopSelf();
             return;
         }
 
         this.currentTargetMac = targetMac;
-        this.currentIsSyncAction = isSyncAction;
+        this.currentAction = action;
+        this.currentDeviceName = deviceName;
+
+        // Se non stiamo registrando un nuovo dispositivo, carichiamo i dati dello smartphone associato
+        if (!ACTION_PAIR_NEW_DEVICE.equals(action)) {
+            Device enrolled = DeviceManager.getDeviceByMac(this, targetMac);
+            if (enrolled != null) {
+                secretKey = enrolled.getSecretKey();
+                clientId = enrolled.getClientId();
+            }
+        }
+
+        if (secretKey == null || clientId <= 0) {
+            notifyCompletion("NACK_ERR");
+            stopSelf();
+            return;
+        }
+
+        this.currentSecretKey = secretKey;
+        this.currentClientId = clientId;
+
+        byte[] manufacturerPayload;
+        String debugDesc;
+
+        if (ACTION_PAIR_NEW_DEVICE.equals(action)) {
+            manufacturerPayload = TOTPGenerator.buildPairingRegistrationPayload(targetMac, clientId, secretKey);
+            debugDesc = String.format(Locale.US, "PAIR_SEED (ClientID=0x%04X)", clientId);
+        } else if (ACTION_ENABLE_REMOTE_PAIRING.equals(action)) {
+            long counter = DeviceManager.incrementAndGetCounter(this, targetMac);
+            if (counter <= 0) {
+                notifyCompletion("NACK_ERR");
+                stopSelf();
+                return;
+            }
+            manufacturerPayload = TOTPGenerator.buildCommandPayload(
+                    TOTPGenerator.CMD_ENTER_PAIRING, targetMac, clientId, secretKey, counter
+            );
+            debugDesc = String.format(Locale.US, "ENTER_PAIR_MODE (Cnt=%d)", counter);
+        } else if (ACTION_SYNC_TIME.equals(action)) {
+            long ts = System.currentTimeMillis() / 1000L;
+            manufacturerPayload = TOTPGenerator.buildCommandPayload(
+                    TOTPGenerator.CMD_TIME_SYNC, targetMac, clientId, secretKey, ts
+            );
+            debugDesc = String.format(Locale.US, "TIME_SYNC (TS=%d)", ts);
+        } else {
+            long counter = DeviceManager.incrementAndGetCounter(this, targetMac);
+            if (counter <= 0) {
+                notifyCompletion("NACK_ERR");
+                stopSelf();
+                return;
+            }
+            manufacturerPayload = TOTPGenerator.buildCommandPayload(
+                    TOTPGenerator.CMD_TRIGGER, targetMac, clientId, secretKey, counter
+            );
+            debugDesc = String.format(Locale.US, "ROLLING_TRIGGER (Cnt=%d)", counter);
+        }
+
+        if (manufacturerPayload == null) {
+            notifyCompletion("NACK_ERR");
+            stopSelf();
+            return;
+        }
 
         AdvertiseSettings settings = new AdvertiseSettings.Builder()
                 .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
                 .setConnectable(false)
-                .setTimeout(0) 
+                .setTimeout(0)
                 .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
                 .build();
 
-        AdvertiseData data;
-        
-        // Convert MAC string (e.g. "AA:BB:CC:DD:EE:FF") to 6 bytes
-        byte[] macBytes = new byte[6];
-        String[] macParts = targetMac.split(":");
-        if (macParts.length == 6) {
-            for (int i = 0; i < 6; i++) {
-                macBytes[i] = (byte) Integer.parseInt(macParts[i], 16);
-            }
-        }
+        AdvertiseData data = new AdvertiseData.Builder()
+                .addManufacturerData(0x02E5, manufacturerPayload)
+                .build();
 
-        if (isSyncAction) {
-            int ts = (int)(System.currentTimeMillis() / 1000L);
-            byte[] syncPayload = TOTPGenerator.generateTimeSyncPayload(secretKey, ts);
-            if (syncPayload == null) {
-                notifyCompletion(null);
-                stopSelf();
-                return;
-            }
-            
-            // Sync payload with MAC addressing is not strictly defined in the strategy, 
-            // but we can append it if we want. For now, let's keep it broadcast or we can prepend MAC.
-            // Let's prepend MAC to make it addressed too (though we didn't change MCU for this yet, so we'll just broadcast)
-            data = new AdvertiseData.Builder()
-                    .addManufacturerData(0x02E5, syncPayload)
-                    .build();
-        } else {
-            String totp = TOTPGenerator.generateTOTP(secretKey);
-            if (totp == null) {
-                notifyCompletion(null);
-                stopSelf();
-                return;
-            }
-            
-            // New Payload: [MAC_0..MAC_5] + [TOTP_0..TOTP_5]
-            byte[] totpBytes = totp.getBytes(StandardCharsets.UTF_8);
-            byte[] payload = new byte[12];
-            System.arraycopy(macBytes, 0, payload, 0, 6);
-            System.arraycopy(totpBytes, 0, payload, 6, 6);
-
-            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), true, totp, "To: " + targetMac));
-            data = new AdvertiseData.Builder()
-                    .addManufacturerData(0x02E5, payload)
-                    .build();
-        }
-
+        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), true, debugDesc, "To: " + targetMac));
         advertiser.startAdvertising(settings, data, advertiseCallback);
 
         ScanSettings scanSettings = new ScanSettings.Builder()
@@ -186,7 +219,7 @@ public class ApritiSedanoService extends Service {
         ScanFilter filter = new ScanFilter.Builder()
                 .setManufacturerData(0x02E5, new byte[]{}, new byte[]{})
                 .setServiceUuid(new ParcelUuid(TARGET_SERVICE_UUID))
-                .setDeviceAddress(targetMac) // Listen only for ACKs from THIS MAC!
+                .setDeviceAddress(targetMac)
                 .build();
 
         scanner.startScan(Collections.singletonList(filter), scanSettings, scanCallback);
@@ -203,83 +236,99 @@ public class ApritiSedanoService extends Service {
     private final AdvertiseCallback advertiseCallback = new AdvertiseCallback() {
         @Override
         public void onStartSuccess(AdvertiseSettings settingsInEffect) {
-            Log.d(TAG, "Advertising avviato con successo");
+            Log.d(TAG, "Advertising BLE avviato con successo");
         }
 
         @Override
         public void onStartFailure(int errorCode) {
-            Log.e(TAG, "Errore Advertising: " + errorCode);
+            Log.e(TAG, "Errore Advertising BLE: " + errorCode);
         }
     };
-
-
-    public enum BoxState {
-        OPEN,
-        CLOSED,
-        UNKNOWN
-    }
 
     private final ScanCallback scanCallback = new ScanCallback() {
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
-            if (result.getScanRecord() != null) {
-                byte[] payload = result.getScanRecord().getManufacturerSpecificData(0x02E5);
-                if (payload != null) {
-                    if (payload.length == 10 && (payload[0] == 0x01 || payload[0] == 0x02 || payload[0] == 0x03)) {
-                        // Se stavamo sincronizzando l'orologio e il dispositivo torna nello stato normale 0x01, la sync è riuscita!
-                        if (currentIsSyncAction && payload[0] == 0x01) {
-                            BoxState syncedState = (payload[1] == 1) ? BoxState.OPEN : BoxState.CLOSED;
-                            Log.d(TAG, "Sincronizzazione orologio completata! Stato box: " + syncedState);
-                            DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "TIME_SYNC_OK (Stato: " + syncedState + ")"));
-                            notifyCompletion(syncedState);
-                            stopSelf();
-                        }
-                        return;
-                    }
+            if (operationCompleted || result.getScanRecord() == null) return;
 
-                    String response = new String(payload, StandardCharsets.UTF_8);
-                    
-                    if (response.contains("ACK_OK_OPEN")) {
-                        Log.d(TAG, "Ricevuto ACK DAL BOX: APERTO");
-                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_OK_OPEN (Stato: APERTO)"));
-                        notifyCompletion(BoxState.OPEN);
-                        stopSelf();
-                    } else if (response.contains("ACK_OK_CLOSED")) {
-                        Log.d(TAG, "Ricevuto ACK DAL BOX: CHIUSO");
-                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_OK_CLOSED (Stato: CHIUSO)"));
-                        notifyCompletion(BoxState.CLOSED);
-                        stopSelf();
-                    } else if (response.contains("NACK_TIME_ERR")) {
-                        Log.d(TAG, "Ricevuto NACK DAL BOX: TIME_INVALID");
-                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "NACK_TIME_ERR (Orologio non allineato)"));
-                        notifyCompletion(BoxState.UNKNOWN);
-                        stopSelf();
-                    } else {
-                        // Other packets or partial payloads (e.g. while BLE is sending)
-                        DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "Dato Sconosciuto/Parziale: " + response));
-                    }
+            byte[] payload = result.getScanRecord().getManufacturerSpecificData(0x02E5);
+            if (payload == null || payload.length == 0) return;
+
+            // Ignora i beacon di stato continui (0x01 = Normal, 0x04 = Pairing Mode)
+            if (payload.length == 6 && (payload[0] == 0x01 || payload[0] == 0x04)) {
+                return;
+            }
+
+            String response = new String(payload, StandardCharsets.UTF_8);
+
+            if (response.contains("ACK_OK_OPEN")) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_OK_OPEN (APERTO)"));
+                notifyCompletion("OPEN");
+                stopSelf();
+            } else if (response.contains("ACK_OK_CLOSED")) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_OK_CLOSED (CHIUSO)"));
+                notifyCompletion("CLOSED");
+                stopSelf();
+            } else if (response.contains("ACK_PAIRED")) {
+                operationCompleted = true;
+                if (ACTION_PAIR_NEW_DEVICE.equals(currentAction) && currentTargetMac != null && currentSecretKey != null) {
+                    String name = (currentDeviceName != null && !currentDeviceName.isEmpty()) ? currentDeviceName : "ApritiSedano";
+                    Device newDev = new Device(currentTargetMac, name, currentSecretKey, currentClientId, 0L);
+                    DeviceManager.addDevice(ApritiSedanoService.this, newDev);
                 }
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_PAIRED (Accoppiato)"));
+                notifyCompletion("PAIRED");
+                stopSelf();
+            } else if (response.contains("ACK_PAIR_MODE")) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_PAIR_MODE (Ricevitore in ascolto 60s)"));
+                notifyCompletion("PAIR_MODE_ENABLED");
+                stopSelf();
+            } else if (response.contains("ACK_TIME_OK")) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_TIME_OK (RTC sincronizzato)"));
+                notifyCompletion("TIME_SYNC_OK");
+                stopSelf();
+            } else if (response.contains("NACK_USED")) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "NACK_USED (Seed già usato)"));
+                notifyCompletion("NACK_USED");
+                stopSelf();
+            } else if (response.contains("NACK_ERR")) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "NACK_ERR (Rifiutato)"));
+                notifyCompletion("NACK_ERR");
+                stopSelf();
             }
         }
     };
 
-    private void notifyCompletion(BoxState boxState) {
-        // Notifica di sistema
+    private void notifyCompletion(String resultState) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         String msg;
-        if (boxState == BoxState.OPEN) {
+        if ("OPEN".equals(resultState)) {
             msg = "Operazione completata. Stato box: APERTO";
-        } else if (boxState == BoxState.CLOSED) {
+        } else if ("CLOSED".equals(resultState)) {
             msg = "Operazione completata. Stato box: CHIUSO";
+        } else if ("PAIRED".equals(resultState)) {
+            msg = "Smartphone associato con successo al ricevitore!";
+        } else if ("PAIR_MODE_ENABLED".equals(resultState)) {
+            msg = "Ricevitore in modalità accoppiamento per 60 secondi.";
+        } else if ("TIME_SYNC_OK".equals(resultState)) {
+            msg = "Orologio RTC sincronizzato con successo.";
+        } else if ("NACK_USED".equals(resultState)) {
+            msg = "Codice rifiutato: seed già utilizzato.";
         } else {
             msg = getString(R.string.failure_message);
         }
-        manager.notify(NOTIFICATION_ID + 1, buildNotification(msg));
+        if (manager != null) {
+            manager.notify(NOTIFICATION_ID + 1, buildNotification(msg));
+        }
 
-        // Invia broadcast all'interfaccia utente (MainActivity)
         Intent intent = new Intent(ACTION_OPERATION_RESULT);
         intent.setPackage(getPackageName());
-        intent.putExtra(EXTRA_BOX_STATE, boxState != null ? boxState.name() : BoxState.UNKNOWN.name());
+        intent.putExtra(EXTRA_BOX_STATE, resultState != null ? resultState : "UNKNOWN");
         if (currentTargetMac != null) {
             intent.putExtra(EXTRA_TARGET_MAC, currentTargetMac);
         }
@@ -294,14 +343,16 @@ public class ApritiSedanoService extends Service {
                     NotificationManager.IMPORTANCE_LOW
             );
             NotificationManager manager = getSystemService(NotificationManager.class);
-            manager.createNotificationChannel(channel);
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
         }
     }
 
-    private Notification buildNotification(String text) {
+    private Notification buildNotification(String contentText) {
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(getString(R.string.app_name))
-                .setContentText(text)
+                .setContentText(contentText)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build();
@@ -309,19 +360,21 @@ public class ApritiSedanoService extends Service {
 
     @Override
     public void onDestroy() {
-        if (advertiser != null) advertiser.stopAdvertising(advertiseCallback);
-        if (scanner != null) scanner.stopScan(scanCallback);
+        super.onDestroy();
         timeoutHandler.removeCallbacksAndMessages(null);
-        
-        // Notifica l'activity che il servizio si è fermato
+        if (advertiser != null && checkBluetoothPermissions()) {
+            try { advertiser.stopAdvertising(advertiseCallback); } catch (Exception ignored) {}
+        }
+        if (scanner != null && checkBluetoothPermissions()) {
+            try { scanner.stopScan(scanCallback); } catch (Exception ignored) {}
+        }
+
         Intent stopIntent = new Intent(ACTION_SERVICE_STOPPED);
         stopIntent.setPackage(getPackageName());
         if (currentTargetMac != null) {
             stopIntent.putExtra(EXTRA_TARGET_MAC, currentTargetMac);
         }
         sendBroadcast(stopIntent);
-
-        super.onDestroy();
     }
 
     @Nullable

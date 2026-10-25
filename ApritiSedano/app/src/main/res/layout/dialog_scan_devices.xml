@@ -8,33 +8,39 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Ricerca dispositivi vicini..."
+        android:text="Dispositivi ApritiSedano vicini"
         android:textAlignment="center"
         android:textSize="18sp"
         android:textStyle="bold"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="8dp"/>
 
-    <ProgressBar
-        android:id="@+id/progress_scan"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:layout_gravity="center"
-        android:layout_marginBottom="16dp"
-        android:indeterminate="true"/>
-
-    <TextView
-        android:id="@+id/tv_scan_status"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Scansione in corso..."
-        android:textAlignment="center"
-        android:textColor="#666666"
-        android:layout_marginBottom="16dp"/>
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginBottom="12dp">
+
+        <ProgressBar
+            android:id="@+id/progress_scan"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="8dp"
+            android:indeterminate="true"/>
+
+        <TextView
+            android:id="@+id/tv_scan_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Scansione BLE in tempo reale..."
+            android:textColor="#666666"
+            android:textSize="13sp"/>
+    </LinearLayout>
 
     <ListView
         android:id="@+id/lv_scanned_devices"
         android:layout_width="match_parent"
-        android:layout_height="250dp"
+        android:layout_height="340dp"
         android:divider="#E0E0E0"
         android:dividerHeight="1dp" />
 
@@ -42,8 +48,8 @@
         android:id="@+id/btn_cancel_scan"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Annulla"
-        android:layout_marginTop="16dp"
+        android:text="Chiudi"
+        android:layout_marginTop="12dp"
         style="@style/Widget.MaterialComponents.Button.TextButton" />
 
 </LinearLayout>
