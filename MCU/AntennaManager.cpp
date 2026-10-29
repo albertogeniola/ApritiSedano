@@ -6,13 +6,23 @@ bool AntennaManager::_isExternal = false;
 
 void AntennaManager::init() {
 #if HW_SUPPORTS_EXTERNAL_ANTENNA
+    #ifdef HW_ANT_ENABLE_PIN
+    pinMode(HW_ANT_ENABLE_PIN, OUTPUT);
+    digitalWrite(HW_ANT_ENABLE_PIN, LOW); // Attiva lo switch RF integrato (WIFI_ENABLE su XIAO ESP32-C6)
+    #endif
+
     // Configura il pin di selezione dello switch RF
     pinMode(HW_ANT_SELECT_PIN, OUTPUT);
 
-    // Carica la configurazione salvata da NVS
+    // Carica (o forza) la configurazione antenna
     Preferences prefs;
     prefs.begin("apritisedano", false);
+    #if defined(HW_FORCE_INTERNAL_ANTENNA) && HW_FORCE_INTERNAL_ANTENNA
+    _isExternal = false;
+    prefs.putBool("ext_ant", false);
+    #else
     _isExternal = prefs.getBool("ext_ant", false);
+    #endif
     prefs.end();
 
     applyHardwareState();
@@ -44,6 +54,9 @@ AntennaState AntennaManager::getState() {
 
 void AntennaManager::applyHardwareState() {
 #if HW_SUPPORTS_EXTERNAL_ANTENNA
+    #ifdef HW_ANT_ENABLE_PIN
+    digitalWrite(HW_ANT_ENABLE_PIN, LOW);
+    #endif
     digitalWrite(HW_ANT_SELECT_PIN, _isExternal ? HIGH : LOW);
 #endif
 }

@@ -6,6 +6,9 @@
 // (Seeed Studio XIAO ESP32C6 oppure ESP32-WROOM-32), con possibilità di scelta manuale.
 // ==========================================
 
+#define BOARD_XIAO_ESP32C6
+//#define BOARD_ESP32_WROOM32
+
 #if defined(CONFIG_IDF_TARGET_ESP32C6) || defined(ARDUINO_XIAO_ESP32C6)
     #undef BOARD_ESP32_WROOM32
     #ifndef BOARD_XIAO_ESP32C6
@@ -16,9 +19,6 @@
     #ifndef BOARD_ESP32_WROOM32
     #define BOARD_ESP32_WROOM32
     #endif
-#else
-    #define BOARD_XIAO_ESP32C6
-    //#define BOARD_ESP32_WROOM32
 #endif
 
 // ==========================================
@@ -34,11 +34,11 @@
 #if defined(BOARD_XIAO_ESP32C6)
     // Usa le macro D0, D1, D2 ecc. definite dal BSP Arduino per XIAO ESP32-C6
     #define HW_RELAY_PIN        D1          // Morsetto D1 -> GPIO 1
-    
+
     // Stato del segnale Relè:
     // - Per moduli relè commerciali separati (Active-LOW, senza transistor sul PCB): ON=LOW, OFF=HIGH
     // - Per PCB definitivo con transistor NPN Q1 (Active-HIGH): ON=HIGH, OFF=LOW
-    #define HW_RELAY_ON_STATE   HIGH   
+    #define HW_RELAY_ON_STATE   HIGH
     #define HW_RELAY_OFF_STATE  LOW
 
     #define HW_SENSOR_PIN       D2          // Morsetto D2 -> GPIO 2
@@ -47,7 +47,7 @@
 
     #define HW_LED_PIN          D0          // LED RGB WS2812 connesso al pin D0
     #define HW_LED_IS_RGB       true
-    #define HW_LED_ON_STATE     LOW   
+    #define HW_LED_ON_STATE     LOW
     #define HW_LED_OFF_STATE    HIGH
     #define HW_BUZZER_PIN       D3          // Morsetto D3 -> GPIO 21
     // I2C Pins per DS3231 RTC
@@ -56,12 +56,14 @@
     #define HW_BOOT_PIN         9           // Pulsante BOOT sulla scheda -> GPIO 9 (nota: D9 su XIAO C6 è GPIO 20)
     #define HW_EXTERNAL_BTN_PIN D6          // Pulsante esterno aggiunto al PCB
 
-    // Supporto Antenna Esterna (RF switch integrato su XIAO ESP32-C6)
+    // Supporto Antenna (RF switch integrato su XIAO ESP32-C6)
     #define HW_SUPPORTS_EXTERNAL_ANTENNA true
+    #define HW_FORCE_INTERNAL_ANTENNA    true        // Forza l'utilizzo dell'antenna ceramica interna all'avvio
+    #define HW_ANT_ENABLE_PIN            3           // GPIO 3 (WIFI_ENABLE: LOW = RF switch alimentato)
     #ifndef D14
     #define D14 14
     #endif
-    #define HW_ANT_SELECT_PIN   D14         // GPIO 14 (LOW = Antenna ceramica integrata, HIGH = Antenna esterna U.FL)
+    #define HW_ANT_SELECT_PIN            D14         // GPIO 14 (LOW = Antenna ceramica integrata, HIGH = Antenna esterna U.FL)
 
 #elif defined(BOARD_ESP32_WROOM32)
     #ifndef D0
@@ -77,7 +79,7 @@
 
     // Sostituisci questi pin GPIO con quelli che sceglierai di usare sulla tua dev board ESP32
     #define HW_RELAY_PIN        D4    // Esempio: GPIO 4
-    #define HW_RELAY_ON_STATE   HIGH  
+    #define HW_RELAY_ON_STATE   HIGH
     #define HW_RELAY_OFF_STATE  LOW
     #define HW_SENSOR_PIN       D5    // Esempio: GPIO 5
     #define HW_SENSOR_PIN_MODE  INPUT_PULLUP // Standalone: pull-up interno
