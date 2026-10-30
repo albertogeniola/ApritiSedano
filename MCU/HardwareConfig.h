@@ -58,7 +58,7 @@
 
     // Supporto Antenna (RF switch integrato su XIAO ESP32-C6)
     #define HW_SUPPORTS_EXTERNAL_ANTENNA true
-    #define HW_FORCE_INTERNAL_ANTENNA    false       // false = legge da NVS l'antenna configurata (10s tasto o menu CLI)
+    #define HW_FORCE_INTERNAL_ANTENNA    true        // true = forza sempre l'antenna interna ceramica
     #define HW_ANT_ENABLE_PIN            3           // GPIO 3 (WIFI_ENABLE: LOW = RF switch alimentato)
     #ifndef D14
     #define D14 14

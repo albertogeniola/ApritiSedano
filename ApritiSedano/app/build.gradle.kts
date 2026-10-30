@@ -44,6 +44,7 @@ dependencies {
     androidTestImplementation(libs.ext.junit)
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("com.google.zxing:core:3.5.3")
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.0")
 }
 
 tasks.register("deployForAndroidAuto") {

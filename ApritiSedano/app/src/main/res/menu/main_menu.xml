@@ -13,4 +13,8 @@
         android:id="@+id/action_debug_mode"
         android:title="Log di Debug BLE"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/action_flash_cable"
+        android:title="Flash Firmware via Cavo USB"
+        app:showAsAction="never" />
 </menu>

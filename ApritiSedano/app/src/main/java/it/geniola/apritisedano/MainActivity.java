@@ -60,6 +60,12 @@ import com.google.zxing.BarcodeFormat;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
 import com.journeyapps.barcodescanner.ScanContract;
 import com.journeyapps.barcodescanner.ScanOptions;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.widget.ScrollView;
+import com.hoho.android.usbserial.driver.UsbSerialDriver;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -103,6 +109,54 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar pbOtaProgress = null;
     private TextView tvOtaStatus = null;
     private TextView tvOtaDetails = null;
+
+    // Flashing Firmware via Cavo USB OTG
+    private byte[] pendingCableFirmwareBytes = null;
+    private String pendingCableFirmwareName = null;
+    private int pendingCableFlashOffset = 0x10000;
+    private AlertDialog cableFlashDialog = null;
+    private TextView tvCableFirmwareStatus = null;
+    private TextView tvCableDeviceStatus = null;
+    private EditText etCableOffset = null;
+    private Button btnStartCableFlash = null;
+    private UsbSerialDriver selectedCableDriver = null;
+    private Esp32SerialFlasher activeFlasher = null;
+    private AlertDialog cableProgressDialog = null;
+    private ProgressBar pbCableProgress = null;
+    private TextView tvCableProgressPercent = null;
+    private TextView tvCableProgressPhase = null;
+    private TextView tvCableProgressLog = null;
+    private ScrollView svCableProgressLog = null;
+    private static final String ACTION_USB_PERMISSION = "it.geniola.apritisedano.USB_PERMISSION";
+
+    private final ActivityResultLauncher<String[]> cableFilePickerLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+                if (uri != null) {
+                    handleSelectedCableFirmwareUri(uri);
+                }
+            }
+    );
+
+    private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (ACTION_USB_PERMISSION.equals(action)) {
+                synchronized (this) {
+                    UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                        if (device != null) {
+                            Log.d(TAG, "Permesso USB concesso: " + device.getDeviceName());
+                            executeCableFlashing();
+                        }
+                    } else {
+                        Toast.makeText(MainActivity.this, "Permesso USB negato dall'utente.", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            }
+        }
+    };
 
     private final Handler pairingTimerHandler = new Handler(Looper.getMainLooper());
     private final Runnable pairingTimerRunnable = new Runnable() {
@@ -396,6 +450,17 @@ public class MainActivity extends AppCompatActivity {
             ivDebug.setOnClickListener(v -> startActivity(new Intent(this, DebugActivity.class)));
         }
 
+        ImageView ivFlashCable = findViewById(R.id.iv_flash_cable);
+        if (ivFlashCable != null) {
+            ivFlashCable.setOnClickListener(v -> showCableFlashDialog());
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbPermissionReceiver, new IntentFilter(ACTION_USB_PERMISSION), Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(usbPermissionReceiver, new IntentFilter(ACTION_USB_PERMISSION));
+        }
+
         checkAndRequestPermissions();
 
         nfcAdapter = NfcAdapter.getDefaultAdapter(this);
@@ -416,6 +481,13 @@ public class MainActivity extends AppCompatActivity {
             activeOtaUpdater.cancel();
             activeOtaUpdater = null;
         }
+        if (activeFlasher != null) {
+            activeFlasher.cancel();
+            activeFlasher = null;
+        }
+        try {
+            unregisterReceiver(usbPermissionReceiver);
+        } catch (Exception ignored) {}
     }
 
     private void showPairingCountdownDialog(String targetMac, int initialSeconds) {
@@ -622,6 +694,7 @@ public class MainActivity extends AppCompatActivity {
 
         final String optPairing = "Attiva Modalità Accoppiamento";
         final String optOta     = "Aggiornamento Firmware (OTA)";
+        final String optCable   = "Flash Firmware via Cavo USB (OTG)";
         final String optDebug   = "Debug Dispositivo";
         final String optNfc     = "Scrivi Tag NFC";
         final String optQr      = "Mostra QR Backup Dispositivo";
@@ -634,6 +707,8 @@ public class MainActivity extends AppCompatActivity {
         if (currentDevice.isMaster()) {
             optionList.add(optOta);
         }
+        optionList.add(optCable);
+        optionList.add(optCable);
         optionList.add(optDebug);
         optionList.add(optNfc);
         optionList.add(optQr);
@@ -652,6 +727,10 @@ public class MainActivity extends AppCompatActivity {
                 enableRemotePairingMode(currentDevice);
             } else if (optOta.equals(selected)) {
                 promptSelectOtaFirmware(currentDevice);
+            } else if (optCable.equals(selected)) {
+                showCableFlashDialog();
+            } else if (optCable.equals(selected)) {
+                showCableFlashDialog();
             } else if (optDebug.equals(selected)) {
                 Intent debugIntent = new Intent(this, DebugActivity.class);
                 debugIntent.putExtra("EXTRA_TARGET_MAC", currentDevice.getMacAddress());
@@ -1562,5 +1641,462 @@ public class MainActivity extends AppCompatActivity {
                 startActivity(Intent.createChooser(shareIntent, "Condividi QR Code"));
             }
         } catch (Exception ignored) {}
+    }
+
+    // ==========================================
+    // MENU OPZIONI PRINCIPALE (ACTION BAR)
+    // ==========================================
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.main_menu, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(@NonNull MenuItem item) {
+        int id = item.getItemId();
+        if (id == R.id.action_flash_cable) {
+            showCableFlashDialog();
+            return true;
+        } else if (id == R.id.action_debug_mode) {
+            startActivity(new Intent(this, DebugActivity.class));
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    // ==========================================
+    // FLASHING FIRMWARE VIA CAVO USB (OTG)
+    // ==========================================
+
+    private void showCableFlashDialog() {
+        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        List<UsbSerialDriver> drivers = Esp32SerialFlasher.getAvailableDrivers(usbManager);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Flash Firmware via Cavo USB (OTG)");
+
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(18);
+        container.setPadding(pad, pad, pad, pad);
+        scrollView.addView(container);
+
+        // 1. STATO DISPOSITIVO USB
+        TextView tvDevHeader = new TextView(this);
+        tvDevHeader.setText("1. Dispositivo USB collegato:");
+        tvDevHeader.setTypeface(null, Typeface.BOLD);
+        tvDevHeader.setTextSize(14.5f);
+        container.addView(tvDevHeader);
+
+        tvCableDeviceStatus = new TextView(this);
+        tvCableDeviceStatus.setTextSize(13.5f);
+        tvCableDeviceStatus.setPadding(0, dpToPx(4), 0, dpToPx(6));
+        container.addView(tvCableDeviceStatus);
+
+        updateCableDeviceStatus(drivers);
+
+        Button btnRefreshUsb = new Button(this);
+        btnRefreshUsb.setText("Aggiorna Rilevamento USB");
+        btnRefreshUsb.setTextSize(12.5f);
+        btnRefreshUsb.setOnClickListener(v -> {
+            List<UsbSerialDriver> refreshed = Esp32SerialFlasher.getAvailableDrivers(usbManager);
+            updateCableDeviceStatus(refreshed);
+        });
+        container.addView(btnRefreshUsb);
+
+        // 2. SELEZIONE FIRMWARE (.BIN)
+        TextView tvFwHeader = new TextView(this);
+        tvFwHeader.setText("2. Seleziona file firmware (.bin):");
+        tvFwHeader.setTypeface(null, Typeface.BOLD);
+        tvFwHeader.setTextSize(14.5f);
+        tvFwHeader.setPadding(0, dpToPx(14), 0, dpToPx(4));
+        container.addView(tvFwHeader);
+
+        tvCableFirmwareStatus = new TextView(this);
+        tvCableFirmwareStatus.setTextSize(13.5f);
+        tvCableFirmwareStatus.setPadding(0, 0, 0, dpToPx(6));
+        updateCableFirmwareStatusText();
+        container.addView(tvCableFirmwareStatus);
+
+        Button btnPickFile = new Button(this);
+        btnPickFile.setText("Scegli file dal telefono (.bin)...");
+        btnPickFile.setTextSize(12.5f);
+        btnPickFile.setOnClickListener(v -> {
+            cableFilePickerLauncher.launch(new String[]{"application/octet-stream", "*/*"});
+        });
+        container.addView(btnPickFile);
+
+        TextView tvQuickHeader = new TextView(this);
+        tvQuickHeader.setText("Oppure seleziona firmware pronti in Download:");
+        tvQuickHeader.setTextSize(12f);
+        tvQuickHeader.setTextColor(Color.parseColor("#616161"));
+        tvQuickHeader.setPadding(0, dpToPx(8), 0, dpToPx(4));
+        container.addView(tvQuickHeader);
+
+        LinearLayout quickRow1 = new LinearLayout(this);
+        quickRow1.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button btnQuickWroom = new Button(this);
+        btnQuickWroom.setText("ESP32-WROOM");
+        btnQuickWroom.setTextSize(11f);
+        btnQuickWroom.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        btnQuickWroom.setOnClickListener(v -> loadPredefinedFirmware("ApritiSedano_ESP32_WROOM.bin", 0x10000));
+        quickRow1.addView(btnQuickWroom);
+
+        Button btnQuickXiao = new Button(this);
+        btnQuickXiao.setText("XIAO C6 (Ant. Interna)");
+        btnQuickXiao.setTextSize(11f);
+        btnQuickXiao.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        btnQuickXiao.setOnClickListener(v -> loadPredefinedFirmware("ApritiSedano_XIAO_ESP32C6_InternalAntenna.bin", 0x10000));
+        quickRow1.addView(btnQuickXiao);
+
+        container.addView(quickRow1);
+
+        LinearLayout quickRow2 = new LinearLayout(this);
+        quickRow2.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button btnQuickWroomMerged = new Button(this);
+        btnQuickWroomMerged.setText("WROOM Full (4MB)");
+        btnQuickWroomMerged.setTextSize(11f);
+        btnQuickWroomMerged.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        btnQuickWroomMerged.setOnClickListener(v -> loadPredefinedFirmware("ApritiSedano_ESP32_WROOM_full_merged.bin", 0x0000));
+        quickRow2.addView(btnQuickWroomMerged);
+
+        Button btnQuickXiaoMerged = new Button(this);
+        btnQuickXiaoMerged.setText("XIAO C6 Full (4MB)");
+        btnQuickXiaoMerged.setTextSize(11f);
+        btnQuickXiaoMerged.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        btnQuickXiaoMerged.setOnClickListener(v -> loadPredefinedFirmware("ApritiSedano_XIAO_ESP32C6_InternalAntenna_full_merged.bin", 0x0000));
+        quickRow2.addView(btnQuickXiaoMerged);
+
+        container.addView(quickRow2);
+
+        // 3. OFFSET DI SCRITTURA
+        TextView tvOffsetHeader = new TextView(this);
+        tvOffsetHeader.setText("3. Offset Flash (Indirizzo di scrittura):");
+        tvOffsetHeader.setTypeface(null, Typeface.BOLD);
+        tvOffsetHeader.setTextSize(14.5f);
+        tvOffsetHeader.setPadding(0, dpToPx(14), 0, dpToPx(4));
+        container.addView(tvOffsetHeader);
+
+        etCableOffset = new EditText(this);
+        etCableOffset.setText(String.format(Locale.US, "0x%05X", pendingCableFlashOffset));
+        etCableOffset.setTextSize(13.5f);
+        container.addView(etCableOffset);
+
+        TextView tvOffsetHint = new TextView(this);
+        tvOffsetHint.setText("Usa 0x10000 per app standard/OTA; usa 0x0000 per immagini complete 'merged'.");
+        tvOffsetHint.setTextSize(11.5f);
+        tvOffsetHint.setTextColor(Color.parseColor("#757575"));
+        tvOffsetHint.setPadding(0, 0, 0, dpToPx(10));
+        container.addView(tvOffsetHint);
+
+        builder.setView(scrollView);
+        builder.setPositiveButton("Avvia Flash", null);
+        builder.setNegativeButton("Chiudi", (d, w) -> d.dismiss());
+
+        cableFlashDialog = builder.create();
+        cableFlashDialog.setOnShowListener(d -> {
+            btnStartCableFlash = cableFlashDialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            btnStartCableFlash.setOnClickListener(v -> startCableFlashingProcess());
+        });
+        cableFlashDialog.show();
+    }
+
+    private void updateCableDeviceStatus(List<UsbSerialDriver> drivers) {
+        if (tvCableDeviceStatus == null) return;
+        if (drivers == null || drivers.isEmpty()) {
+            selectedCableDriver = null;
+            tvCableDeviceStatus.setText("Nessun dispositivo USB rilevato.\nCollega l'ESP32 allo smartphone con cavo USB OTG.");
+            tvCableDeviceStatus.setTextColor(Color.parseColor("#C62828"));
+        } else {
+            selectedCableDriver = drivers.get(0);
+            String desc = Esp32SerialFlasher.getDeviceDescription(selectedCableDriver);
+            tvCableDeviceStatus.setText("Rilevato: " + desc);
+            tvCableDeviceStatus.setTextColor(Color.parseColor("#2E7D32"));
+        }
+    }
+
+    private void updateCableFirmwareStatusText() {
+        if (tvCableFirmwareStatus == null) return;
+        if (pendingCableFirmwareBytes == null) {
+            tvCableFirmwareStatus.setText("Nessun file selezionato.");
+            tvCableFirmwareStatus.setTextColor(Color.parseColor("#757575"));
+        } else {
+            String name = (pendingCableFirmwareName != null) ? pendingCableFirmwareName : "firmware.bin";
+            tvCableFirmwareStatus.setText(String.format(Locale.US, "Selezionato: %s (%,d byte)", name, pendingCableFirmwareBytes.length));
+            tvCableFirmwareStatus.setTextColor(Color.parseColor("#1565C0"));
+        }
+    }
+
+    private void handleSelectedCableFirmwareUri(Uri uri) {
+        String fileName = queryDisplayName(uri);
+        try (InputStream is = getContentResolver().openInputStream(uri)) {
+            if (is == null) {
+                Toast.makeText(this, "Impossibile aprire il file selezionato.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int r;
+            while ((r = is.read(buf)) != -1) {
+                bos.write(buf, 0, r);
+            }
+            byte[] bytes = bos.toByteArray();
+            if (bytes.length < 4096) {
+                Toast.makeText(this, "File troppo piccolo per essere un firmware ESP32 valido.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            if ((bytes[0] & 0xFF) != 0xE9) {
+                Toast.makeText(this, "Attenzione: Magic byte ESP32 (0xE9) non rilevato all'offset 0.", Toast.LENGTH_LONG).show();
+            }
+
+            pendingCableFirmwareBytes = bytes;
+            pendingCableFirmwareName = fileName;
+
+            if (bytes.length >= 2 * 1024 * 1024) {
+                pendingCableFlashOffset = 0x0000;
+            } else {
+                pendingCableFlashOffset = 0x10000;
+            }
+
+            if (etCableOffset != null) {
+                etCableOffset.setText(String.format(Locale.US, "0x%05X", pendingCableFlashOffset));
+            }
+            updateCableFirmwareStatusText();
+            Toast.makeText(this, "File caricato: " + fileName, Toast.LENGTH_SHORT).show();
+
+        } catch (Exception e) {
+            Log.e(TAG, "Errore caricamento firmware cavo", e);
+            Toast.makeText(this, "Errore caricamento file: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void loadPredefinedFirmware(String fileName, int defaultOffset) {
+        File downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+        File fwFile = new File(downloadDir, fileName);
+        if (!fwFile.exists() || fwFile.length() == 0) {
+            fwFile = new File("/sdcard/Download", fileName);
+        }
+
+        if (!fwFile.exists() || fwFile.length() == 0) {
+            Toast.makeText(this, "File non trovato in Download: " + fileName, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(fwFile)) {
+            byte[] bytes = new byte[(int) fwFile.length()];
+            int read = 0;
+            while (read < bytes.length) {
+                int r = fis.read(bytes, read, bytes.length - read);
+                if (r < 0) break;
+                read += r;
+            }
+            pendingCableFirmwareBytes = bytes;
+            pendingCableFirmwareName = fileName;
+            pendingCableFlashOffset = defaultOffset;
+
+            if (etCableOffset != null) {
+                etCableOffset.setText(String.format(Locale.US, "0x%05X", pendingCableFlashOffset));
+            }
+            updateCableFirmwareStatusText();
+            Toast.makeText(this, "Caricato: " + fileName, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Errore lettura file: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void startCableFlashingProcess() {
+        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        if (selectedCableDriver == null) {
+            List<UsbSerialDriver> drivers = Esp32SerialFlasher.getAvailableDrivers(usbManager);
+            if (drivers.isEmpty()) {
+                Toast.makeText(this, "Nessun dispositivo USB rilevato. Collega l'ESP32 con cavo OTG.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            selectedCableDriver = drivers.get(0);
+        }
+
+        if (pendingCableFirmwareBytes == null || pendingCableFirmwareBytes.length == 0) {
+            Toast.makeText(this, "Seleziona prima un file firmware (.bin) da flashare.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        if (etCableOffset != null) {
+            String offStr = etCableOffset.getText().toString().trim();
+            try {
+                if (offStr.toLowerCase().startsWith("0x")) {
+                    pendingCableFlashOffset = (int) Long.parseLong(offStr.substring(2), 16);
+                } else {
+                    pendingCableFlashOffset = Integer.parseInt(offStr);
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "Offset non valido. Esempio valido: 0x10000 o 0x0000.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
+
+        UsbDevice device = selectedCableDriver.getDevice();
+        if (!usbManager.hasPermission(device)) {
+            PendingIntent pi = PendingIntent.getBroadcast(
+                    this,
+                    0,
+                    new Intent(ACTION_USB_PERMISSION).setPackage(getPackageName()),
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0
+            );
+            usbManager.requestPermission(device, pi);
+            Toast.makeText(this, "Richiesta permessi USB inviata: autorizza il dispositivo a schermo.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        executeCableFlashing();
+    }
+
+    private void executeCableFlashing() {
+        if (cableFlashDialog != null && cableFlashDialog.isShowing()) {
+            cableFlashDialog.dismiss();
+        }
+
+        showCableProgressDialog();
+
+        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        activeFlasher = new Esp32SerialFlasher();
+
+        new Thread(() -> {
+            activeFlasher.flashFirmware(
+                    usbManager,
+                    selectedCableDriver,
+                    pendingCableFirmwareBytes,
+                    pendingCableFlashOffset,
+                    new Esp32SerialFlasher.Callback() {
+                        @Override
+                        public void onStatus(String status) {
+                            runOnUiThread(() -> {
+                                if (tvCableProgressPhase != null) {
+                                    tvCableProgressPhase.setText(status);
+                                }
+                                appendCableProgressLog(status);
+                            });
+                        }
+
+                        @Override
+                        public void onProgress(int percent, int writtenBytes, int totalBytes, long bytesPerSec) {
+                            runOnUiThread(() -> {
+                                if (pbCableProgress != null) {
+                                    pbCableProgress.setProgress(percent);
+                                }
+                                if (tvCableProgressPercent != null) {
+                                    tvCableProgressPercent.setText(String.format(Locale.US,
+                                            "%d%% (%d / %d KB - %d KB/s)",
+                                            percent, writtenBytes / 1024, totalBytes / 1024, bytesPerSec / 1024));
+                                }
+                            });
+                        }
+
+                        @Override
+                        public void onSuccess() {
+                            runOnUiThread(() -> {
+                                dismissCableProgressDialog();
+                                showResultAlertDialog(
+                                        "Flash Completato con Successo!",
+                                        "Il firmware Ã¨ stato scritto sull'ESP32 via cavo USB.\n" +
+                                                "Il microcontrollore Ã¨ stato riavviato ed Ã¨ ora operativo con la nuova versione!"
+                                );
+                            });
+                        }
+
+                        @Override
+                        public void onError(String errorMessage) {
+                            runOnUiThread(() -> {
+                                dismissCableProgressDialog();
+                                showResultAlertDialog(
+                                        "Errore durante il Flash USB",
+                                        "Si Ã¨ verificato un errore:\n" + errorMessage +
+                                                "\n\nSuggerimento: se la sincronizzazione fallisce, tieni premuto il pulsante BOOT (o GPIO 0 / GPIO 9) sulla scheda mentre colleghi il cavo USB e riprova."
+                                );
+                            });
+                        }
+                    }
+            );
+        }).start();
+    }
+
+    private void showCableProgressDialog() {
+        dismissCableProgressDialog();
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Flashing Firmware via Cavo USB");
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(18);
+        container.setPadding(pad, pad, pad, pad);
+
+        tvCableProgressPhase = new TextView(this);
+        tvCableProgressPhase.setText("Avvio procedura...");
+        tvCableProgressPhase.setTextSize(14f);
+        tvCableProgressPhase.setTypeface(null, Typeface.BOLD);
+        tvCableProgressPhase.setPadding(0, 0, 0, dpToPx(10));
+        container.addView(tvCableProgressPhase);
+
+        pbCableProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        pbCableProgress.setMax(100);
+        pbCableProgress.setProgress(0);
+        container.addView(pbCableProgress, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        tvCableProgressPercent = new TextView(this);
+        tvCableProgressPercent.setText("0%");
+        tvCableProgressPercent.setTextSize(12.5f);
+        tvCableProgressPercent.setGravity(Gravity.END);
+        tvCableProgressPercent.setTextColor(Color.parseColor("#616161"));
+        tvCableProgressPercent.setPadding(0, dpToPx(4), 0, dpToPx(10));
+        container.addView(tvCableProgressPercent);
+
+        svCableProgressLog = new ScrollView(this);
+        tvCableProgressLog = new TextView(this);
+        tvCableProgressLog.setTextSize(11f);
+        tvCableProgressLog.setTypeface(Typeface.MONOSPACE);
+        tvCableProgressLog.setTextColor(Color.parseColor("#424242"));
+        svCableProgressLog.addView(tvCableProgressLog);
+
+        LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dpToPx(120)
+        );
+        container.addView(svCableProgressLog, logParams);
+
+        builder.setView(container);
+        builder.setCancelable(false);
+        builder.setNegativeButton("Annulla", (d, w) -> {
+            if (activeFlasher != null) {
+                activeFlasher.cancel();
+            }
+            d.dismiss();
+        });
+
+        cableProgressDialog = builder.create();
+        cableProgressDialog.show();
+    }
+
+    private void appendCableProgressLog(String line) {
+        if (tvCableProgressLog != null) {
+            tvCableProgressLog.append(line + "\n");
+            if (svCableProgressLog != null) {
+                svCableProgressLog.post(() -> svCableProgressLog.fullScroll(View.FOCUS_DOWN));
+            }
+        }
+    }
+
+    private void dismissCableProgressDialog() {
+        if (cableProgressDialog != null && cableProgressDialog.isShowing()) {
+            try { cableProgressDialog.dismiss(); } catch (Exception ignored) {}
+        }
+        cableProgressDialog = null;
     }
 }
