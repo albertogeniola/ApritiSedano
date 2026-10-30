@@ -10,7 +10,8 @@ enum LedState {
     LED_OUT_OF_SYNC,
     LED_DUPLICATE,
     LED_HEARTBEAT,
-    LED_PAIRING
+    LED_PAIRING,
+    LED_OTA
 };
 
 class LedIndicator {

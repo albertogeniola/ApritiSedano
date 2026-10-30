@@ -4,7 +4,9 @@
 #include <string.h>
 
 PairedClient RollingCodeManager::_clients[RC_MAX_CLIENTS];
+SlotRuntimeEvent RollingCodeManager::_slotEvents[RC_MAX_CLIENTS];
 volatile bool RollingCodeManager::_slotDirty[RC_MAX_CLIENTS] = {false};
+volatile bool RollingCodeManager::_cliEventUpdated = false;
 
 uint16_t RollingCodeManager::_lastBurstClientId = 0;
 uint32_t RollingCodeManager::_lastBurstCounter = 0;
@@ -17,9 +19,11 @@ unsigned long RollingCodeManager::_lastPairedTimeMs = 0;
 
 void RollingCodeManager::init() {
     memset(_clients, 0, sizeof(_clients));
+    memset(_slotEvents, 0, sizeof(_slotEvents));
     for (int i = 0; i < RC_MAX_CLIENTS; i++) {
         _slotDirty[i] = false;
     }
+    _cliEventUpdated = false;
 
     Preferences prefs;
     if (!prefs.begin("apritisedano", true)) {
@@ -28,6 +32,7 @@ void RollingCodeManager::init() {
     }
 
     int count = 0;
+    int masterSlot = -1;
     char key[12];
     for (int i = 0; i < RC_MAX_CLIENTS; i++) {
         snprintf(key, sizeof(key), "rc_slot_%d", i);
@@ -35,11 +40,25 @@ void RollingCodeManager::init() {
             prefs.getBytes(key, &_clients[i], sizeof(PairedClient));
             if (_clients[i].active) {
                 count++;
+                if ((_clients[i].flags & RC_FLAG_MASTER) != 0) {
+                    if (masterSlot < 0) {
+                        masterSlot = i;
+                    } else {
+                        // Garantisce al massimo un singolo Master attivo
+                        _clients[i].flags &= ~RC_FLAG_MASTER;
+                        _slotDirty[i] = true;
+                    }
+                }
             }
         }
     }
     prefs.end();
-    Serial.printf("RollingCodeManager: Loaded %d paired smartphone(s) from NVS.\n", count);
+    if (masterSlot >= 0) {
+        Serial.printf("RollingCodeManager: Loaded %d paired smartphone(s) from NVS (Master OTA: Slot %d, ClientID 0x%04X).\n",
+                      count, masterSlot, _clients[masterSlot].clientId);
+    } else {
+        Serial.printf("RollingCodeManager: Loaded %d paired smartphone(s) from NVS (Master OTA: non configurato).\n", count);
+    }
 }
 
 void RollingCodeManager::saveSlotToNVS(int slot) {
@@ -226,7 +245,7 @@ PairingRegistrationResult RollingCodeManager::registerClient(uint16_t clientId, 
     }
 
     _clients[slot].active = 1;
-    _clients[slot].reserved = 0;
+    _clients[slot].flags = 0; // Un nuovo seed non è mai Master finché non viene abilitato via CLI
     _clients[slot].clientId = clientId;
     _clients[slot].lastCounter = 0;
     memcpy(_clients[slot].seed, seed16, RC_SEED_SIZE);
@@ -236,25 +255,171 @@ PairingRegistrationResult RollingCodeManager::registerClient(uint16_t clientId, 
     memcpy(_lastPairedSeed, seed16, RC_SEED_SIZE);
     _lastPairedTimeMs = nowMs;
 
+    recordClientEvent(clientId, "NUOVA_ASSOCIAZIONE");
+
     return RC_PAIR_SUCCESS;
 }
 
-void RollingCodeManager::printClients() {
-    Serial.println("\n--- SMARTPHONE ASSOCIATI (ROLLING CODE) ---");
+int RollingCodeManager::getMasterSlot() {
+    for (int i = 0; i < RC_MAX_CLIENTS; i++) {
+        if (_clients[i].active && ((_clients[i].flags & RC_FLAG_MASTER) != 0)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool RollingCodeManager::setMasterSlot(int slotIndex) {
+    if (slotIndex == -1) {
+        for (int i = 0; i < RC_MAX_CLIENTS; i++) {
+            if (_clients[i].active && ((_clients[i].flags & RC_FLAG_MASTER) != 0)) {
+                _clients[i].flags &= ~RC_FLAG_MASTER;
+                _slotDirty[i] = false;
+                saveSlotToNVS(i);
+            }
+        }
+        return true;
+    }
+
+    if (slotIndex < 0 || slotIndex >= RC_MAX_CLIENTS || !_clients[slotIndex].active) {
+        return false;
+    }
+
+    for (int i = 0; i < RC_MAX_CLIENTS; i++) {
+        if (i == slotIndex) {
+            if ((_clients[i].flags & RC_FLAG_MASTER) == 0) {
+                _clients[i].flags |= RC_FLAG_MASTER;
+                _slotDirty[i] = false;
+                saveSlotToNVS(i);
+            }
+        } else if (_clients[i].active && ((_clients[i].flags & RC_FLAG_MASTER) != 0)) {
+            _clients[i].flags &= ~RC_FLAG_MASTER;
+            _slotDirty[i] = false;
+            saveSlotToNVS(i);
+        }
+    }
+    return true;
+}
+
+bool RollingCodeManager::isMasterClient(uint16_t clientId) {
+    int slot = findClientSlot(clientId);
+    if (slot < 0) return false;
+    return ((_clients[slot].flags & RC_FLAG_MASTER) != 0);
+}
+
+bool RollingCodeManager::getMasterSeed(uint8_t* outSeed16, uint16_t* outClientId) {
+    int slot = getMasterSlot();
+    if (slot < 0) return false;
+    if (outSeed16 != nullptr) {
+        memcpy(outSeed16, _clients[slot].seed, RC_SEED_SIZE);
+    }
+    if (outClientId != nullptr) {
+        *outClientId = _clients[slot].clientId;
+    }
+    return true;
+}
+
+uint32_t RollingCodeManager::computeMasterTag(const uint8_t* targetMac6) {
+    int slot = getMasterSlot();
+    if (slot < 0 || targetMac6 == nullptr) {
+        return 0;
+    }
+
+    // Message layout (7 bytes): [0xA5] [targetMac6 (6B Big-Endian)]
+    uint8_t msg[7];
+    msg[0] = 0xA5;
+    memcpy(&msg[1], targetMac6, 6);
+
+    uint8_t hash[20];
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA1), 1);
+    mbedtls_md_hmac_starts(&ctx, _clients[slot].seed, RC_SEED_SIZE);
+    mbedtls_md_hmac_update(&ctx, msg, sizeof(msg));
+    mbedtls_md_hmac_finish(&ctx, hash);
+    mbedtls_md_free(&ctx);
+
+    uint32_t tag = ((uint32_t)hash[0] << 24) |
+                   ((uint32_t)hash[1] << 16) |
+                   ((uint32_t)hash[2] << 8)  |
+                   (uint32_t)hash[3];
+    return (tag == 0) ? 1UL : tag;
+}
+
+void RollingCodeManager::recordClientEvent(uint16_t clientId, const char* eventLabel) {
+    int slot = findClientSlot(clientId);
+    if (slot < 0 || eventLabel == nullptr) return;
+
+    _slotEvents[slot].hasEvent = true;
+    strncpy(_slotEvents[slot].label, eventLabel, sizeof(_slotEvents[slot].label) - 1);
+    _slotEvents[slot].label[sizeof(_slotEvents[slot].label) - 1] = '\0';
+    time(&_slotEvents[slot].epoch);
+    _slotEvents[slot].eventMillis = millis();
+    _cliEventUpdated = true;
+}
+
+bool RollingCodeManager::consumeCliEventUpdate() {
+    if (_cliEventUpdated) {
+        _cliEventUpdated = false;
+        return true;
+    }
+    return false;
+}
+
+void RollingCodeManager::printClientsWithEvents() {
+    Serial.println("\n--- SMARTPHONE ASSOCIATI (SEED & ULTIMO EVENTO OSSERVATO) ---");
     int count = 0;
+    unsigned long nowMs = millis();
+
     for (int i = 0; i < RC_MAX_CLIENTS; i++) {
         if (_clients[i].active) {
-            Serial.printf("Slot %2d | ClientID: 0x%04X (%5u) | Last Counter: %lu\n",
-                          i, _clients[i].clientId, _clients[i].clientId, (unsigned long)_clients[i].lastCounter);
+            const bool isMaster = ((_clients[i].flags & RC_FLAG_MASTER) != 0);
+            const uint8_t* s = _clients[i].seed;
+
+            char eventBuf[80];
+            if (_slotEvents[i].hasEvent) {
+                unsigned long agoSec = (nowMs - _slotEvents[i].eventMillis) / 1000UL;
+                struct tm tmInfo;
+                if (_slotEvents[i].epoch >= 1704067200 && gmtime_r(&_slotEvents[i].epoch, &tmInfo) != nullptr) {
+                    char timeStr[24];
+                    strftime(timeStr, sizeof(timeStr), "%H:%M:%S UTC", &tmInfo);
+                    snprintf(eventBuf, sizeof(eventBuf), "%s (%lus fa, %s)",
+                             _slotEvents[i].label, agoSec, timeStr);
+                } else {
+                    snprintf(eventBuf, sizeof(eventBuf), "%s (%lus fa)",
+                             _slotEvents[i].label, agoSec);
+                }
+            } else {
+                snprintf(eventBuf, sizeof(eventBuf), "(Nessun evento dal boot)");
+            }
+
+            Serial.printf("Slot %2d %-8s | ID: 0x%04X | Seed: %02X%02X..%02X%02X | Cnt: %5lu | Ultimo: %s\n",
+                          i,
+                          isMaster ? "[MASTER]" : "[Utente]",
+                          _clients[i].clientId,
+                          s[0], s[1], s[14], s[15],
+                          (unsigned long)_clients[i].lastCounter,
+                          eventBuf);
             count++;
         }
     }
+
     if (count == 0) {
         Serial.println("Nessuno smartphone associato.");
     } else {
-        Serial.printf("Totale: %d/%d slot occupati (Finestra accettazione: +%d codici).\n",
-                      count, RC_MAX_CLIENTS, RC_WINDOW_SIZE);
+        int masterSlot = getMasterSlot();
+        if (masterSlot >= 0) {
+            Serial.printf("Totale: %d/%d slot occupati | Master OTA attivo: Slot %d (ID: 0x%04X)\n",
+                          count, RC_MAX_CLIENTS, masterSlot, _clients[masterSlot].clientId);
+        } else {
+            Serial.printf("Totale: %d/%d slot occupati | Master OTA attivo: NESSUNO (OTA disabilitato)\n",
+                          count, RC_MAX_CLIENTS);
+        }
     }
+}
+
+void RollingCodeManager::printClients() {
+    printClientsWithEvents();
 }
 
 bool RollingCodeManager::removeClientBySlot(int slotIndex) {
@@ -262,12 +427,14 @@ bool RollingCodeManager::removeClientBySlot(int slotIndex) {
     if (!_clients[slotIndex].active) return false;
 
     memset(&_clients[slotIndex], 0, sizeof(PairedClient));
+    memset(&_slotEvents[slotIndex], 0, sizeof(SlotRuntimeEvent));
     saveSlotToNVS(slotIndex);
     return true;
 }
 
 void RollingCodeManager::clearAllClients() {
     memset(_clients, 0, sizeof(_clients));
+    memset(_slotEvents, 0, sizeof(_slotEvents));
     for (int i = 0; i < RC_MAX_CLIENTS; i++) {
         _slotDirty[i] = false;
         saveSlotToNVS(i);

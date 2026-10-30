@@ -1,8 +1,9 @@
 #include "Logger.h"
 #include <LittleFS.h>
 #include <time.h>
+#include <esp_ota_ops.h>
 
-#define MAX_LOG_SIZE 50000 // 50 KB
+#define MAX_LOG_SIZE 40000 // 40 KB (max ~80 KB con logs.bak su partizione LittleFS da 128 KB)
 
 void Logger::init() {
     // Mount LittleFS. If it fails, format and mount.
@@ -97,6 +98,18 @@ void Logger::printSysInfo() {
     Serial.println("--- SYSTEM INFO ---");
     Serial.printf("Flash Chip Size: %d Bytes\n", ESP.getFlashChipSize());
     Serial.printf("Free Heap RAM: %u Bytes (Min Free: %u Bytes)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+    const esp_partition_t* runningPart = esp_ota_get_running_partition();
+    const esp_partition_t* nextOtaPart = esp_ota_get_next_update_partition(NULL);
+    if (runningPart != nullptr) {
+        Serial.printf("Active App Partition: %s (Offset: 0x%06lX, Size: %lu Bytes)\n",
+                      runningPart->label, (unsigned long)runningPart->address, (unsigned long)runningPart->size);
+    }
+    if (nextOtaPart != nullptr) {
+        Serial.printf("Next OTA Target Partition: %s (Offset: 0x%06lX, Size: %lu Bytes)\n",
+                      nextOtaPart->label, (unsigned long)nextOtaPart->address, (unsigned long)nextOtaPart->size);
+    } else {
+        Serial.println("Next OTA Target Partition: NONE (OTA non supportato dalla tabella partizioni attuale)");
+    }
     Serial.printf("LittleFS Total Space: %d Bytes\n", totalBytes);
     Serial.printf("LittleFS Used Space: %d Bytes\n", usedBytes);
     Serial.printf("LittleFS Free Space: %d Bytes\n", totalBytes - usedBytes);
@@ -107,4 +120,3 @@ void Logger::printSysInfo() {
     }
     Serial.println("-------------------");
 }
-

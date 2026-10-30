@@ -83,6 +83,9 @@ void LedIndicator::setState(LedState state) {
         case LED_PAIRING:
             setRGB(0, 180, 255); // Ciano/Blu per modalità accoppiamento
             break;
+        case LED_OTA:
+            setRGB(255, 0, 255); // Viola/Magenta per modalità aggiornamento OTA
+            break;
     }
 }
 
@@ -189,6 +192,16 @@ void LedIndicator::loop() {
             if (now - _lastToggleTime >= 300) {
                 _ledOn = !_ledOn;
                 if (_ledOn) setRGB(0, 180, 255);
+                else setRGB(0, 0, 0);
+                _lastToggleTime = now;
+            }
+            break;
+
+        case LED_OTA:
+            // Lampeggio Viola/Magenta (250ms ON / 250ms OFF) durante OTA
+            if (now - _lastToggleTime >= 250) {
+                _ledOn = !_ledOn;
+                if (_ledOn) setRGB(255, 0, 255);
                 else setRGB(0, 0, 0);
                 _lastToggleTime = now;
             }

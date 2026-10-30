@@ -11,7 +11,9 @@ enum BleResponseType : uint8_t {
     RESP_ACK_PAIR_MODE = 4,
     RESP_ACK_TIME_OK = 5,
     RESP_NACK_USED = 6,
-    RESP_NACK_ERR = 7
+    RESP_NACK_ERR = 7,
+    RESP_ACK_OTA_READY = 8,
+    RESP_NACK_NOT_MASTER = 9
 };
 
 class BleHandler {
@@ -22,13 +24,18 @@ public:
     static void resume();
     static void enterPairingMode();
     static bool isPairingMode() { return _isPairingMode; }
-    static bool isBusy() {
-        return _isRelayActive || _isAckActive || _isPairingMode || _buttonIsDown ||
-               _needsTriggerAction || _needsDuplicateAction || _needsEnterPairingAction ||
-               _needsPairedSuccessAction || (_pendingTimeSyncEpoch != 0);
-    }
+
+    // Modalità Identificazione Seed per menu Serial CLI: valida i pacchetti ma BLOCCA il relè
+    static void setIdentifyOnlyMode(bool enable) { _identifyOnlyMode = enable; }
+    static bool isIdentifyOnlyMode() { return _identifyOnlyMode; }
+
+    // Callback invocato da OtaManager al termine/annullamento di una sessione OTA
+    static void onOtaSessionEnded();
+
+    static bool isBusy();
 
 private:
+    static void setAdvertisingConnectable(bool connectable);
     static void startAdvertisingResponse(const char* payloadStr);
     static void stopAdvertisingACK();
     static void updateStateBeacon();
@@ -40,6 +47,7 @@ private:
     static uint8_t _lastTriggeredTargetState;
     static uint8_t _ownMac[6];
     static bool _isPaused;
+    static volatile bool _identifyOnlyMode;
 
     static unsigned long _lastTimeSyncMs;
     static bool _isPairingMode;
@@ -55,6 +63,8 @@ private:
     static volatile bool _needsTriggerAction;
     static volatile bool _needsDuplicateAction;
     static volatile bool _needsEnterPairingAction;
+    static volatile bool _needsEnterOtaAction;
+    static volatile uint32_t _pendingOtaCounter;
     static volatile bool _needsPairedSuccessAction;
     static volatile uint8_t _pendingResponseCode;
     static volatile uint8_t _needsErrorFeedback;

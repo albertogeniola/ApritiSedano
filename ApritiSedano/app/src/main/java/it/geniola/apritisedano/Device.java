@@ -9,6 +9,7 @@ public class Device {
     private String secretKey; // 128-bit Hex seed (32 chars)
     private int clientId;     // 16-bit identifier registered with the MCU (1..65534)
     private long counter;     // Monotonically increasing rolling code counter
+    private boolean isMaster; // True if the MCU beacon identifies this smartphone's seed as Master OTA
 
     // UI State (Not persisted)
     private int currentState = -1; // -1: Unknown, 1: Open, 2: Closed, 5: Pairing Mode
@@ -17,15 +18,20 @@ public class Device {
     private boolean isActionPending = false;
 
     public Device(String macAddress, String name, String secretKey) {
-        this(macAddress, name, secretKey, TOTPGenerator.generateRandomClientId(), 0L);
+        this(macAddress, name, secretKey, TOTPGenerator.generateRandomClientId(), 0L, false);
     }
 
     public Device(String macAddress, String name, String secretKey, int clientId, long counter) {
+        this(macAddress, name, secretKey, clientId, counter, false);
+    }
+
+    public Device(String macAddress, String name, String secretKey, int clientId, long counter, boolean isMaster) {
         this.macAddress = macAddress;
         this.name = name;
         this.secretKey = secretKey;
         this.clientId = clientId;
         this.counter = counter;
+        this.isMaster = isMaster;
     }
 
     public String getMacAddress() {
@@ -62,6 +68,14 @@ public class Device {
 
     public void setCounter(long counter) {
         this.counter = counter;
+    }
+
+    public boolean isMaster() {
+        return isMaster;
+    }
+
+    public void setMaster(boolean master) {
+        isMaster = master;
     }
 
     public int getCurrentState() {
@@ -114,6 +128,7 @@ public class Device {
         json.put("secretKey", secretKey);
         json.put("clientId", clientId);
         json.put("counter", counter);
+        json.put("isMaster", isMaster);
         return json;
     }
 
@@ -126,6 +141,7 @@ public class Device {
             clientId = TOTPGenerator.generateRandomClientId();
         }
         long counter = json.optLong("counter", 0L);
-        return new Device(mac, name, secret, clientId, counter);
+        boolean isMaster = json.optBoolean("isMaster", false);
+        return new Device(mac, name, secret, clientId, counter, isMaster);
     }
 }

@@ -1,6 +1,6 @@
 #include <Arduino.h>
-#include <WiFi.h>
 #include "BleHandler.h"
+#include "OtaManager.h"
 #include "ConfigCLI.h"
 #include "LedIndicator.h"
 #include "HardwareConfig.h"
@@ -44,10 +44,8 @@ void setup() {
     // Inizializza controllo antenna (interna/esterna)
     AntennaManager::init();
 
-    // OTTIMIZZAZIONE ENERGETICA: Spegniamo il modulo WiFi dato che il sistema è 100% offline
-    WiFi.mode(WIFI_OFF);
-
-    // OTTIMIZZAZIONE ENERGETICA: Riduciamo la frequenza della CPU a 80MHz per abbattere i consumi (da ~130mA a ~90mA)
+    // OTTIMIZZAZIONE ENERGETICA: Riduciamo la frequenza della CPU a 80MHz per abbattere i consumi (da ~130mA a ~90mA).
+    // Nota: Lo stack Wi-Fi non è più compilato nel binario (100% BLE offline + BLE GATT OTA), risparmiando ~700KB di Flash.
     setCpuFrequencyMhz(80);
 
     // Inizializza feedback visivo usando le costanti definite in HardwareConfig.h
@@ -95,8 +93,11 @@ void loop() {
 
     // Aggiornamento stato base del LED
     LedState currentState = LedIndicator::getState();
-    if (currentState == LED_IDLE || currentState == LED_UNCONFIGURED || currentState == LED_PAIRING) {
-        if (BleHandler::isPairingMode()) {
+    if (currentState == LED_IDLE || currentState == LED_UNCONFIGURED ||
+        currentState == LED_PAIRING || currentState == LED_OTA) {
+        if (OtaManager::isActive()) {
+            LedIndicator::setState(LED_OTA);
+        } else if (BleHandler::isPairingMode()) {
             LedIndicator::setState(LED_PAIRING);
         } else if (!RollingCodeManager::hasAnyClient()) {
             LedIndicator::setState(LED_UNCONFIGURED);
@@ -135,6 +136,7 @@ void loop() {
                 LedIndicator::setState(LED_CONFIG);
                 BleHandler::pause();
                 ConfigCLI::handle();
+                BleHandler::setIdentifyOnlyMode(false);
                 BleHandler::resume();
                 if (!BleHandler::isPairingMode()) {
                     LedIndicator::setState(LED_IDLE);
@@ -147,5 +149,6 @@ void loop() {
     }
 
     // OTTIMIZZAZIONE ENERGETICA: Evitiamo che il loop occupi il 100% della CPU, lasciando respirare RTOS
-    delay(10);
+    // (1ms durante trasferimento OTA attivo per massimizzare la velocità di scrittura in Flash, 10ms a riposo)
+    delay(OtaManager::isActive() ? 1 : 10);
 }

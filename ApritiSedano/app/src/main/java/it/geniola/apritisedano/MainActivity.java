@@ -14,6 +14,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -29,6 +30,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelUuid;
+import android.provider.OpenableColumns;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -44,6 +46,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -58,8 +61,10 @@ import com.journeyapps.barcodescanner.BarcodeEncoder;
 import com.journeyapps.barcodescanner.ScanContract;
 import com.journeyapps.barcodescanner.ScanOptions;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -87,6 +92,17 @@ public class MainActivity extends AppCompatActivity {
     private long activePairingModalEndTimeMs = 0L;
     private String activePairingModalMac = null;
     private String pendingModalOperation = null;
+
+    // OTA Firmware Upgrade state (Master App only)
+    private Device pendingOtaDevice = null;
+    private byte[] pendingOtaFirmwareBytes = null;
+    private byte[] pendingOtaSha256 = null;
+    private OtaUpdater activeOtaUpdater = null;
+    private boolean isOtaSessionInProgress = false;
+    private AlertDialog otaProgressDialog = null;
+    private ProgressBar pbOtaProgress = null;
+    private TextView tvOtaStatus = null;
+    private TextView tvOtaDetails = null;
 
     private final Handler pairingTimerHandler = new Handler(Looper.getMainLooper());
     private final Runnable pairingTimerRunnable = new Runnable() {
@@ -175,6 +191,16 @@ public class MainActivity extends AppCompatActivity {
     private String pendingQrTargetMac = null;
     private String pendingQrDeviceName = null;
 
+    private final ActivityResultLauncher<String[]> otaFilePickerLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+                if (uri == null || pendingOtaDevice == null) {
+                    return;
+                }
+                handleSelectedOtaFirmwareUri(pendingOtaDevice, uri);
+            }
+    );
+
     private final ActivityResultLauncher<ScanOptions> barcodeLauncher = registerForActivityResult(new ScanContract(),
             result -> {
                 if (result.getContents() != null) {
@@ -221,7 +247,7 @@ public class MainActivity extends AppCompatActivity {
             String targetMac = intent.getStringExtra(ApritiSedanoService.EXTRA_TARGET_MAC);
 
             if (ApritiSedanoService.ACTION_SERVICE_STOPPED.equals(action)) {
-                if (targetMac != null) {
+                if (targetMac != null && !isOtaSessionInProgress) {
                     deviceAdapter.markActionPending(targetMac, false);
                 }
             } else if (ApritiSedanoService.ACTION_OPERATION_RESULT.equals(action)) {
@@ -229,10 +255,53 @@ public class MainActivity extends AppCompatActivity {
                 String opType = pendingModalOperation;
                 pendingModalOperation = null;
 
+                String state = intent.getStringExtra(ApritiSedanoService.EXTRA_BOX_STATE);
+
+                // Gestione esito attivazione modalità OTA (fase 1/3 -> fase 2/3 GATT)
+                if ("OTA_READY".equals(state)) {
+                    long usedCounter = intent.getLongExtra(ApritiSedanoService.EXTRA_USED_COUNTER, 0L);
+                    startGattOtaTransfer(usedCounter);
+                    return;
+                } else if ("NACK_NOT_MASTER".equals(state)) {
+                    finishOtaUiSession();
+                    if (targetMac != null) {
+                        DeviceManager.updateMasterStatus(context, targetMac, false);
+                        deviceAdapter.updateDeviceMasterStatus(targetMac, false);
+                        deviceAdapter.markActionPending(targetMac, false);
+                    }
+                    showResultAlertDialog(
+                            "Accesso OTA Negato",
+                            "Il ricevitore ha rifiutato l'aggiornamento perché questo smartphone non risulta configurato come MASTER."
+                    );
+                    return;
+                } else if (ApritiSedanoService.ACTION_ENTER_OTA.equals(opType)) {
+                    finishOtaUiSession();
+                    if (targetMac != null) {
+                        deviceAdapter.markActionPending(targetMac, false);
+                    }
+                    if ("TIMEOUT".equals(state)) {
+                        showResultAlertDialog(
+                                "Nessuna Risposta dal Ricevitore",
+                                "Il ricevitore non ha confermato l'ingresso in modalità OTA entro il tempo limite.\nAssicurati di essere vicino al dispositivo."
+                        );
+                    } else if ("NACK_USED".equals(state)) {
+                        showResultAlertDialog(
+                                "Codice Rifiutato (Già Usato)",
+                                "Il contatore rolling-code inviato risulta già utilizzato. Riprova."
+                        );
+                    } else {
+                        showResultAlertDialog(
+                                "Impossibile Avviare OTA",
+                                "Il ricevitore ha rifiutato l'ingresso in modalità OTA (verifica che la scheda abbia la nuova tabella partizioni Dual-OTA)."
+                        );
+                    }
+                    return;
+                }
+
                 if (targetMac != null) {
                     deviceAdapter.markActionPending(targetMac, false);
                 }
-                String state = intent.getStringExtra(ApritiSedanoService.EXTRA_BOX_STATE);
+
                 if ("OPEN".equals(state)) {
                     if (targetMac != null) deviceAdapter.updateDeviceState(targetMac, 1);
                     Toast.makeText(context, "Operazione completata! Stato: APERTO", Toast.LENGTH_SHORT).show();
@@ -338,6 +407,15 @@ public class MainActivity extends AppCompatActivity {
         pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_MUTABLE);
 
         handleIntent(getIntent());
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (activeOtaUpdater != null) {
+            activeOtaUpdater.cancel();
+            activeOtaUpdater = null;
+        }
     }
 
     private void showPairingCountdownDialog(String targetMac, int initialSeconds) {
@@ -470,9 +548,11 @@ public class MainActivity extends AppCompatActivity {
             registerReceiver(serviceReceiver, filter);
         }
 
-        deviceList = DeviceManager.getDevices(this);
-        deviceAdapter.updateDevices(deviceList);
-        startStateScanning();
+        if (!isOtaSessionInProgress) {
+            deviceList = DeviceManager.getDevices(this);
+            deviceAdapter.updateDevices(deviceList);
+            startStateScanning();
+        }
 
         pairingTimerHandler.removeCallbacks(pairingTimerRunnable);
         pairingTimerHandler.postDelayed(pairingTimerRunnable, 1000L);
@@ -540,32 +620,49 @@ public class MainActivity extends AppCompatActivity {
         Device fresh = DeviceManager.getDeviceByMac(this, device.getMacAddress());
         final Device currentDevice = (fresh != null) ? fresh : device;
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle(String.format(Locale.US, "%s (ID: 0x%04X, Cnt: %d)",
-                currentDevice.getName(), currentDevice.getClientId(), currentDevice.getCounter()));
+        final String optPairing = "Attiva Modalità Accoppiamento";
+        final String optOta     = "Aggiornamento Firmware (OTA)";
+        final String optDebug   = "Debug Dispositivo";
+        final String optNfc     = "Scrivi Tag NFC";
+        final String optQr      = "Mostra QR Backup Dispositivo";
+        final String optRtc     = "Sincronizza Orologio RTC";
+        final String optDelete  = "Elimina Dispositivo";
 
-        CharSequence[] options = {
-                "Attiva Modalità Accoppiamento",
-                "Debug Dispositivo",
-                "Scrivi Tag NFC",
-                "Mostra QR Backup Dispositivo",
-                "Sincronizza Orologio RTC",
-                "Elimina Dispositivo"
-        };
+        List<String> optionList = new ArrayList<>();
+        optionList.add(optPairing);
+        // La voce OTA è visibile ESCLUSIVAMENTE sugli smartphone configurati come Master sull'MCU
+        if (currentDevice.isMaster()) {
+            optionList.add(optOta);
+        }
+        optionList.add(optDebug);
+        optionList.add(optNfc);
+        optionList.add(optQr);
+        optionList.add(optRtc);
+        optionList.add(optDelete);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        String roleSuffix = currentDevice.isMaster() ? " [MASTER]" : "";
+        builder.setTitle(String.format(Locale.US, "%s%s (ID: 0x%04X, Cnt: %d)",
+                currentDevice.getName(), roleSuffix, currentDevice.getClientId(), currentDevice.getCounter()));
+
+        CharSequence[] options = optionList.toArray(new CharSequence[0]);
         builder.setItems(options, (dialog, which) -> {
-            if (which == 0) {
+            String selected = optionList.get(which);
+            if (optPairing.equals(selected)) {
                 enableRemotePairingMode(currentDevice);
-            } else if (which == 1) {
+            } else if (optOta.equals(selected)) {
+                promptSelectOtaFirmware(currentDevice);
+            } else if (optDebug.equals(selected)) {
                 Intent debugIntent = new Intent(this, DebugActivity.class);
                 debugIntent.putExtra("EXTRA_TARGET_MAC", currentDevice.getMacAddress());
                 startActivity(debugIntent);
-            } else if (which == 2) {
+            } else if (optNfc.equals(selected)) {
                 startNfcConfig(currentDevice.getMacAddress());
-            } else if (which == 3) {
+            } else if (optQr.equals(selected)) {
                 showQrDialog(currentDevice);
-            } else if (which == 4) {
+            } else if (optRtc.equals(selected)) {
                 syncDeviceRtcTime(currentDevice);
-            } else if (which == 5) {
+            } else if (optDelete.equals(selected)) {
                 DeviceManager.removeDevice(this, currentDevice.getMacAddress());
                 deviceList = DeviceManager.getDevices(this);
                 deviceAdapter.updateDevices(deviceList);
@@ -573,6 +670,288 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         builder.show();
+    }
+
+    private void promptSelectOtaFirmware(Device device) {
+        if (!hasRequiredPermissions()) {
+            checkAndRequestPermissions();
+            return;
+        }
+        if (!device.isMaster()) {
+            Toast.makeText(this, "Operazione consentita solo alla Master App.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        this.pendingOtaDevice = device;
+        this.pendingOtaFirmwareBytes = null;
+        this.pendingOtaSha256 = null;
+        otaFilePickerLauncher.launch(new String[]{"application/octet-stream", "*/*"});
+    }
+
+    private String queryDisplayName(Uri uri) {
+        String displayName = "firmware.bin";
+        try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0 && !cursor.isNull(idx)) {
+                    displayName = cursor.getString(idx);
+                }
+            }
+        } catch (Exception ignored) {}
+        return displayName;
+    }
+
+    private void handleSelectedOtaFirmwareUri(Device device, Uri uri) {
+        String fileName = queryDisplayName(uri);
+        byte[] fwBytes;
+
+        try (InputStream is = getContentResolver().openInputStream(uri)) {
+            if (is == null) {
+                showResultAlertDialog("Errore Lettura File", "Impossibile aprire il file selezionato.");
+                return;
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int read;
+            int total = 0;
+            while ((read = is.read(buf)) != -1) {
+                total += read;
+                if (total > OtaUpdater.MAX_OTA_FIRMWARE_BYTES) {
+                    showResultAlertDialog(
+                            "File Firmware Troppo Grande",
+                            String.format(Locale.US,
+                                    "Il file '%s' supera la dimensione massima della partizione OTA (1.875 MB / %d byte).\n\n" +
+                                    "Assicurati di selezionare il file dell'applicazione compilata (es. MCU.ino.bin) e NON il dump completo di flash (merged.bin).",
+                                    fileName, OtaUpdater.MAX_OTA_FIRMWARE_BYTES)
+                    );
+                    return;
+                }
+                bos.write(buf, 0, read);
+            }
+            fwBytes = bos.toByteArray();
+        } catch (Exception e) {
+            Log.e(TAG, "Errore caricamento file OTA", e);
+            showResultAlertDialog("Errore Lettura File", "Errore durante la lettura del file: " + e.getMessage());
+            return;
+        }
+
+        if (fwBytes.length < 65536) {
+            showResultAlertDialog(
+                    "File Firmware Non Valido",
+                    "Il file selezionato (" + fwBytes.length + " byte) è troppo piccolo per essere un firmware ESP32 valido."
+            );
+            return;
+        }
+
+        // Ogni immagine applicativa ESP32 / ESP32-C6 valida inizia con il magic byte 0xE9
+        if ((fwBytes[0] & 0xFF) != 0xE9) {
+            showResultAlertDialog(
+                    "Formato Firmware Non Valido",
+                    String.format(Locale.US,
+                            "Il file '%s' non è un'immagine firmware ESP32 valida (magic byte iniziale 0x%02X invece di 0xE9).\n\n" +
+                            "Seleziona il file binario compilato 'MCU.ino.bin'.",
+                            fileName, fwBytes[0] & 0xFF)
+            );
+            return;
+        }
+
+        byte[] sha256 = TOTPGenerator.computeSha256(fwBytes);
+        StringBuilder shaHexPrefix = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            shaHexPrefix.append(String.format(Locale.US, "%02X", sha256[i] & 0xFF));
+        }
+
+        this.pendingOtaDevice = device;
+        this.pendingOtaFirmwareBytes = fwBytes;
+        this.pendingOtaSha256 = sha256;
+
+        String msg = String.format(Locale.US,
+                "Dispositivo: %s (%s)\n" +
+                "File: %s\n" +
+                "Dimensione: %.1f KB (%d byte)\n" +
+                "SHA-256: %s...\n\n" +
+                "Durante l'aggiornamento mantieni lo smartphone vicino al ricevitore e non chiudere l'applicazione.",
+                device.getName(),
+                device.getMacAddress(),
+                fileName,
+                fwBytes.length / 1024.0f,
+                fwBytes.length,
+                shaHexPrefix.toString());
+
+        new AlertDialog.Builder(this)
+                .setTitle("Conferma Aggiornamento OTA")
+                .setMessage(msg)
+                .setPositiveButton("Avvia Aggiornamento OTA", (d, w) -> beginAuthenticatedOtaFlow())
+                .setNegativeButton("Annulla", (d, w) -> {
+                    pendingOtaFirmwareBytes = null;
+                    pendingOtaSha256 = null;
+                })
+                .show();
+    }
+
+    private void beginAuthenticatedOtaFlow() {
+        if (pendingOtaDevice == null || pendingOtaFirmwareBytes == null || pendingOtaSha256 == null) {
+            return;
+        }
+
+        isOtaSessionInProgress = true;
+        stopStateScanning();
+        deviceAdapter.markActionPending(pendingOtaDevice.getMacAddress(), true);
+
+        showOtaUploadProgressDialog(pendingOtaDevice);
+        pendingModalOperation = ApritiSedanoService.ACTION_ENTER_OTA;
+
+        Intent serviceIntent = new Intent(this, ApritiSedanoService.class);
+        serviceIntent.setAction(ApritiSedanoService.ACTION_ENTER_OTA);
+        serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, pendingOtaDevice.getMacAddress());
+        serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, pendingOtaDevice.getSecretKey());
+        serviceIntent.putExtra(ApritiSedanoService.EXTRA_CLIENT_ID, pendingOtaDevice.getClientId());
+        startServiceCompat(serviceIntent);
+    }
+
+    private void showOtaUploadProgressDialog(Device device) {
+        dismissOtaUploadProgressDialog();
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Aggiornamento Firmware OTA");
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(20);
+        container.setPadding(pad, pad, pad, pad);
+
+        TextView tvDevice = new TextView(this);
+        tvDevice.setText(device.getName() + " (" + device.getMacAddress() + ")");
+        tvDevice.setTypeface(null, Typeface.BOLD);
+        tvDevice.setTextSize(14f);
+        tvDevice.setPadding(0, 0, 0, dpToPx(10));
+        container.addView(tvDevice);
+
+        tvOtaStatus = new TextView(this);
+        tvOtaStatus.setText("Attivazione modalità OTA sul ricevitore (Rolling-Code Master)...");
+        tvOtaStatus.setTextSize(13.5f);
+        tvOtaStatus.setPadding(0, 0, 0, dpToPx(14));
+        container.addView(tvOtaStatus);
+
+        pbOtaProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        pbOtaProgress.setIndeterminate(false);
+        pbOtaProgress.setMax(100);
+        pbOtaProgress.setProgress(0);
+        container.addView(pbOtaProgress, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        tvOtaDetails = new TextView(this);
+        tvOtaDetails.setText("In attesa di ACK_OTA_READY...");
+        tvOtaDetails.setTextSize(13f);
+        tvOtaDetails.setTextColor(Color.parseColor("#616161"));
+        tvOtaDetails.setGravity(Gravity.END);
+        tvOtaDetails.setPadding(0, dpToPx(8), 0, 0);
+        container.addView(tvOtaDetails);
+
+        builder.setView(container);
+        builder.setCancelable(false);
+        builder.setNegativeButton("Annulla", (d, w) -> {
+            stopService(new Intent(this, ApritiSedanoService.class));
+            if (activeOtaUpdater != null) {
+                activeOtaUpdater.cancel();
+                activeOtaUpdater = null;
+            } else {
+                String mac = (pendingOtaDevice != null) ? pendingOtaDevice.getMacAddress() : null;
+                finishOtaUiSession();
+                if (mac != null) deviceAdapter.markActionPending(mac, false);
+            }
+        });
+
+        otaProgressDialog = builder.create();
+        otaProgressDialog.show();
+    }
+
+    private void dismissOtaUploadProgressDialog() {
+        if (otaProgressDialog != null && otaProgressDialog.isShowing()) {
+            try { otaProgressDialog.dismiss(); } catch (Exception ignored) {}
+        }
+        otaProgressDialog = null;
+        pbOtaProgress = null;
+        tvOtaStatus = null;
+        tvOtaDetails = null;
+    }
+
+    private void finishOtaUiSession() {
+        isOtaSessionInProgress = false;
+        activeOtaUpdater = null;
+        pendingOtaFirmwareBytes = null;
+        pendingOtaSha256 = null;
+        dismissOtaUploadProgressDialog();
+        startStateScanning();
+    }
+
+    private void startGattOtaTransfer(long authorizedCounter) {
+        if (pendingOtaDevice == null || pendingOtaFirmwareBytes == null || pendingOtaSha256 == null) {
+            finishOtaUiSession();
+            return;
+        }
+
+        final String targetMac = pendingOtaDevice.getMacAddress();
+        final String targetName = pendingOtaDevice.getName();
+
+        if (tvOtaStatus != null) {
+            tvOtaStatus.setText("Modalità OTA attiva! Connessione BLE GATT in corso...");
+        }
+        if (tvOtaDetails != null) {
+            tvOtaDetails.setText(String.format(Locale.US, "0%%  •  0.0 / %.1f KB",
+                    pendingOtaFirmwareBytes.length / 1024.0f));
+        }
+
+        activeOtaUpdater = new OtaUpdater(
+                this,
+                targetMac,
+                pendingOtaDevice.getSecretKey(),
+                authorizedCounter,
+                pendingOtaFirmwareBytes,
+                pendingOtaSha256,
+                new OtaUpdater.Listener() {
+                    @Override
+                    public void onStatusChanged(String statusMessage) {
+                        if (tvOtaStatus != null) {
+                            tvOtaStatus.setText(statusMessage);
+                        }
+                    }
+
+                    @Override
+                    public void onProgress(int bytesSent, int totalBytes, int percent) {
+                        if (pbOtaProgress != null) {
+                            pbOtaProgress.setProgress(percent);
+                        }
+                        if (tvOtaDetails != null) {
+                            tvOtaDetails.setText(String.format(Locale.US,
+                                    "%d%%  •  %.1f / %.1f KB",
+                                    percent,
+                                    bytesSent / 1024.0f,
+                                    totalBytes / 1024.0f));
+                        }
+                    }
+
+                    @Override
+                    public void onSuccess() {
+                        finishOtaUiSession();
+                        deviceAdapter.markActionPending(targetMac, false);
+                        showResultAlertDialog(
+                                "Aggiornamento OTA Completato",
+                                "Il nuovo firmware è stato trasferito, verificato crittograficamente (SHA-256) e attivato con successo su " +
+                                targetName + "!\n\nIl ricevitore si sta riavviando sulla nuova versione."
+                        );
+                    }
+
+                    @Override
+                    public void onError(String errorMessage) {
+                        finishOtaUiSession();
+                        deviceAdapter.markActionPending(targetMac, false);
+                        showResultAlertDialog("Aggiornamento OTA Non Riuscito", errorMessage);
+                    }
+                }
+        );
+        activeOtaUpdater.start();
     }
 
     private void enableRemotePairingMode(Device device) {
@@ -808,7 +1187,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private static int extractBeaconRemainingSeconds(byte[] payload) {
-        if (payload != null && payload.length == 6 && payload[0] == 0x04) {
+        if (payload != null && payload.length >= 6 && payload[0] == 0x04) {
             long val = ((long) (payload[2] & 0xFF) << 24) |
                        ((long) (payload[3] & 0xFF) << 16) |
                        ((long) (payload[4] & 0xFF) << 8)  |
@@ -830,6 +1209,31 @@ public class MainActivity extends AppCompatActivity {
             return ascii.contains("ACK_PAIRED");
         }
         return false;
+    }
+
+    private void updateMasterStatusFromBeacon(String mac, byte[] payload) {
+        if (mac == null || payload == null || payload.length < 10) return;
+        if (payload[0] != 0x01 && payload[0] != 0x04 && payload[0] != 0x05) return;
+
+        Device dev = deviceAdapter.getDeviceInList(mac);
+        if (dev == null) return;
+
+        long beaconMasterTag = ((payload[6] & 0xFFL) << 24) |
+                               ((payload[7] & 0xFFL) << 16) |
+                               ((payload[8] & 0xFFL) << 8)  |
+                               (payload[9] & 0xFFL);
+
+        boolean isMaster = false;
+        if (beaconMasterTag != 0L) {
+            long localTag = TOTPGenerator.computeMasterTag(dev.getSecretKey(), dev.getMacAddress());
+            isMaster = (localTag != 0L && localTag == beaconMasterTag);
+        }
+
+        if (dev.isMaster() != isMaster) {
+            dev.setMaster(isMaster);
+            DeviceManager.updateMasterStatus(this, mac, isMaster);
+            deviceAdapter.updateDeviceMasterStatus(mac, isMaster);
+        }
     }
 
     private final ScanCallback discoveryScanCallback = new ScanCallback() {
@@ -962,6 +1366,7 @@ public class MainActivity extends AppCompatActivity {
                     if (isPayloadPairingMode(payload)) {
                         int beaconRemSec = extractBeaconRemainingSeconds(payload);
                         runOnUiThread(() -> {
+                            updateMasterStatusFromBeacon(mac, payload);
                             if (beaconRemSec > 0) {
                                 deviceAdapter.startDevicePairingCountdown(mac, beaconRemSec);
                                 if (mac.equalsIgnoreCase(activePairingModalMac)) {
@@ -974,6 +1379,7 @@ public class MainActivity extends AppCompatActivity {
                     } else if (payload[0] == 0x01 || isPayloadAckPaired(payload)) {
                         final int newState = (payload[0] == 0x01) ? (payload[1] == 1 ? 1 : 2) : -1;
                         runOnUiThread(() -> {
+                            updateMasterStatusFromBeacon(mac, payload);
                             deviceAdapter.updateDeviceState(mac, newState);
                             if (mac.equalsIgnoreCase(activePairingModalMac) &&
                                     pairingCountdownDialog != null &&
@@ -982,6 +1388,8 @@ public class MainActivity extends AppCompatActivity {
                                 pairingCountdownDialog = null;
                             }
                         });
+                    } else if (payload[0] == 0x05) {
+                        runOnUiThread(() -> updateMasterStatusFromBeacon(mac, payload));
                     }
                 }
             }
@@ -989,7 +1397,7 @@ public class MainActivity extends AppCompatActivity {
     };
 
     private void startStateScanning() {
-        if (!hasRequiredPermissions()) return;
+        if (!hasRequiredPermissions() || isOtaSessionInProgress) return;
         BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         if (manager != null && manager.getAdapter() != null) {
             stateScanner = manager.getAdapter().getBluetoothLeScanner();

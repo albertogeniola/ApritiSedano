@@ -39,6 +39,30 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
         notifyDataSetChanged();
     }
 
+    public Device getDeviceInList(String macAddress) {
+        if (macAddress == null || deviceList == null) return null;
+        for (Device d : deviceList) {
+            if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
+                return d;
+            }
+        }
+        return null;
+    }
+
+    public void updateDeviceMasterStatus(String macAddress, boolean isMaster) {
+        if (macAddress == null || deviceList == null) return;
+        for (int i = 0; i < deviceList.size(); i++) {
+            Device d = deviceList.get(i);
+            if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
+                if (d.isMaster() != isMaster) {
+                    d.setMaster(isMaster);
+                    notifyItemChanged(i);
+                }
+                return;
+            }
+        }
+    }
+
     public void updateDeviceState(String macAddress, int state) {
         for (int i = 0; i < deviceList.size(); i++) {
             Device d = deviceList.get(i);

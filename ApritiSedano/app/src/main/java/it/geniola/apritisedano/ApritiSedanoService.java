@@ -47,6 +47,7 @@ public class ApritiSedanoService extends Service {
     public static final String ACTION_TRIGGER = "ACTION_TRIGGER";
     public static final String ACTION_PAIR_NEW_DEVICE = "ACTION_PAIR_NEW_DEVICE";
     public static final String ACTION_ENABLE_REMOTE_PAIRING = "ACTION_ENABLE_REMOTE_PAIRING";
+    public static final String ACTION_ENTER_OTA = "ACTION_ENTER_OTA";
     public static final String ACTION_SYNC_TIME = "ACTION_SYNC_TIME";
 
     public static final String EXTRA_BOX_STATE = "it.geniola.apritisedano.EXTRA_BOX_STATE";
@@ -54,6 +55,7 @@ public class ApritiSedanoService extends Service {
     public static final String EXTRA_SECRET_KEY = "it.geniola.apritisedano.EXTRA_SECRET_KEY";
     public static final String EXTRA_CLIENT_ID = "it.geniola.apritisedano.EXTRA_CLIENT_ID";
     public static final String EXTRA_DEVICE_NAME = "it.geniola.apritisedano.EXTRA_DEVICE_NAME";
+    public static final String EXTRA_USED_COUNTER = "it.geniola.apritisedano.EXTRA_USED_COUNTER";
 
     private static final String CHANNEL_ID = "ApritiSedanoChannel";
     private static final int NOTIFICATION_ID = 101;
@@ -71,6 +73,7 @@ public class ApritiSedanoService extends Service {
     private String currentSecretKey = null;
     private String currentDeviceName = null;
     private int currentClientId = 0;
+    private long currentUsedCounter = 0L;
     private boolean operationCompleted = false;
 
     @Override
@@ -102,6 +105,7 @@ public class ApritiSedanoService extends Service {
         }
 
         operationCompleted = false;
+        currentUsedCounter = 0L;
         String action = (intent != null && intent.getAction() != null) ? intent.getAction() : ACTION_TRIGGER;
         String targetMac = intent != null ? intent.getStringExtra(EXTRA_TARGET_MAC) : null;
         String secretKey = intent != null ? intent.getStringExtra(EXTRA_SECRET_KEY) : null;
@@ -169,10 +173,23 @@ public class ApritiSedanoService extends Service {
                 stopSelf();
                 return;
             }
+            this.currentUsedCounter = counter;
             manufacturerPayload = TOTPGenerator.buildCommandPayload(
                     TOTPGenerator.CMD_ENTER_PAIRING, targetMac, clientId, secretKey, counter
             );
             debugDesc = String.format(Locale.US, "ENTER_PAIR_MODE (Cnt=%d)", counter);
+        } else if (ACTION_ENTER_OTA.equals(action)) {
+            long counter = DeviceManager.incrementAndGetCounter(this, targetMac);
+            if (counter <= 0) {
+                notifyCompletion("NACK_ERR");
+                stopSelf();
+                return;
+            }
+            this.currentUsedCounter = counter;
+            manufacturerPayload = TOTPGenerator.buildCommandPayload(
+                    TOTPGenerator.CMD_ENTER_OTA, targetMac, clientId, secretKey, counter
+            );
+            debugDesc = String.format(Locale.US, "ENTER_OTA_MODE (Cnt=%d)", counter);
         } else if (ACTION_SYNC_TIME.equals(action)) {
             long ts = System.currentTimeMillis() / 1000L;
             manufacturerPayload = TOTPGenerator.buildCommandPayload(
@@ -186,6 +203,7 @@ public class ApritiSedanoService extends Service {
                 stopSelf();
                 return;
             }
+            this.currentUsedCounter = counter;
             manufacturerPayload = TOTPGenerator.buildCommandPayload(
                     TOTPGenerator.CMD_TRIGGER, targetMac, clientId, secretKey, counter
             );
@@ -253,8 +271,9 @@ public class ApritiSedanoService extends Service {
             byte[] payload = result.getScanRecord().getManufacturerSpecificData(0x02E5);
             if (payload == null || payload.length == 0) return;
 
-            // Ignora i beacon di stato continui (0x01 = Normal, 0x04 = Pairing Mode)
-            if (payload.length == 6 && (payload[0] == 0x01 || payload[0] == 0x04)) {
+            // Ignora i beacon di stato continui (0x01 = Normal, 0x04 = Pairing Mode, 0x05 = OTA Wait)
+            if ((payload.length == 6 || payload.length == 10) &&
+                (payload[0] == 0x01 || payload[0] == 0x04 || payload[0] == 0x05)) {
                 return;
             }
 
@@ -284,6 +303,16 @@ public class ApritiSedanoService extends Service {
                 operationCompleted = true;
                 DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_PAIR_MODE (Ricevitore in ascolto 60s)"));
                 notifyCompletion("PAIR_MODE_ENABLED");
+                stopSelf();
+            } else if (response.contains("ACK_OTA_READY")) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "ACK_OTA_READY (Modalità OTA attiva)"));
+                notifyCompletion("OTA_READY");
+                stopSelf();
+            } else if (response.contains("NACK_NOT_MASTER")) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "NACK_NOT_MASTER (Non autorizzato all'OTA)"));
+                notifyCompletion("NACK_NOT_MASTER");
                 stopSelf();
             } else if (response.contains("ACK_TIME_OK")) {
                 operationCompleted = true;
@@ -315,6 +344,10 @@ public class ApritiSedanoService extends Service {
             msg = "Smartphone associato con successo al ricevitore!";
         } else if ("PAIR_MODE_ENABLED".equals(resultState)) {
             msg = "Ricevitore in modalità accoppiamento per 60 secondi.";
+        } else if ("OTA_READY".equals(resultState)) {
+            msg = "Ricevitore in modalità OTA. Avvio trasferimento firmware...";
+        } else if ("NACK_NOT_MASTER".equals(resultState)) {
+            msg = "Aggiornamento OTA negato: questo smartphone non è Master.";
         } else if ("TIME_SYNC_OK".equals(resultState)) {
             msg = "Orologio RTC sincronizzato con successo.";
         } else if ("NACK_USED".equals(resultState)) {
@@ -329,6 +362,7 @@ public class ApritiSedanoService extends Service {
         Intent intent = new Intent(ACTION_OPERATION_RESULT);
         intent.setPackage(getPackageName());
         intent.putExtra(EXTRA_BOX_STATE, resultState != null ? resultState : "UNKNOWN");
+        intent.putExtra(EXTRA_USED_COUNTER, currentUsedCounter);
         if (currentTargetMac != null) {
             intent.putExtra(EXTRA_TARGET_MAC, currentTargetMac);
         }
