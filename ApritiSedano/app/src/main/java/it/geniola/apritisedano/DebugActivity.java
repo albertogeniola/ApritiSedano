@@ -29,6 +29,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
@@ -88,11 +89,22 @@ public class DebugActivity extends AppCompatActivity {
 
                         Device device = DeviceManager.getDeviceByMac(DebugActivity.this, mac);
                         String label = (device != null) ? device.getName() : mac;
+                        String masterInfo = "";
+                        if (payload.length >= 10) {
+                            long mTag = ((payload[6] & 0xFFL) << 24) |
+                                        ((payload[7] & 0xFFL) << 16) |
+                                        ((payload[8] & 0xFFL) << 8)  |
+                                        (payload[9] & 0xFFL);
+                            if (mTag != 0L && device != null) {
+                                long localTag = TOTPGenerator.computeMasterTag(device.getSecretKey(), device.getMacAddress());
+                                masterInfo = (localTag == mTag) ? " [MASTER]" : String.format(Locale.US, " [MTag:0x%08X]", mTag);
+                            }
+                        }
                         DebugLogger.getInstance().addLog(new DebugLogEntry(
                                 System.currentTimeMillis(),
                                 false,
                                 "",
-                                "Beacon RX [" + label + "]: " + (state == 1 ? "APERTO" : "CHIUSO") + " (ts: " + ts + ")"
+                                "Beacon RX [" + label + "]: " + (state == 1 ? "APERTO" : "CHIUSO") + " (ts: " + ts + ")" + masterInfo
                         ));
                         runOnUiThread(() -> updateList());
                     } else if (payload[0] == 0x04) {
@@ -101,6 +113,14 @@ public class DebugActivity extends AppCompatActivity {
                                 false,
                                 "",
                                 "Beacon RX [" + mac + "]: MODALITÀ ACCOPPIAMENTO ATTIVA"
+                        ));
+                        runOnUiThread(() -> updateList());
+                    } else if (payload[0] == 0x05) {
+                        DebugLogger.getInstance().addLog(new DebugLogEntry(
+                                System.currentTimeMillis(),
+                                false,
+                                "",
+                                "Beacon RX [" + mac + "]: MODALITÀ OTA IN ATTESA DI CONNESSIONE GATT"
                         ));
                         runOnUiThread(() -> updateList());
                     }

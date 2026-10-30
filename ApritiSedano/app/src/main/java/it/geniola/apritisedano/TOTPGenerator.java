@@ -2,12 +2,15 @@ package it.geniola.apritisedano;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Locale;
 
 /**
- * Generatore Rolling-Code (Counter-based HMAC-SHA1) e payload BLE.
+ * Generatore Rolling-Code (Counter-based HMAC-SHA1), autenticazione Master OTA e payload BLE.
  */
 public class TOTPGenerator {
 
@@ -16,6 +19,7 @@ public class TOTPGenerator {
 
     public static final byte CMD_TRIGGER       = (byte) 0x01;
     public static final byte CMD_ENTER_PAIRING = (byte) 0x02;
+    public static final byte CMD_ENTER_OTA     = (byte) 0x03;
     public static final byte CMD_REGISTER_SEED = (byte) 0xFE;
     public static final byte CMD_TIME_SYNC     = (byte) 0xFF;
 
@@ -146,9 +150,101 @@ public class TOTPGenerator {
     }
 
     /**
+     * Calcola il MasterTag a 32 bit (unsigned in long: 1..0xFFFFFFFFL) identico a
+     * RollingCodeManager::computeMasterTag sull'MCU per determinare se questo smartphone è il Master OTA.
+     */
+    public static long computeMasterTag(String secretStr, String targetMac) {
+        byte[] seed16 = decodeSeed16(secretStr);
+        byte[] mac6 = parseMacBytes(targetMac);
+        if (seed16 == null || mac6 == null) return 0L;
+
+        byte[] msg = new byte[7];
+        msg[0] = (byte) 0xA5;
+        System.arraycopy(mac6, 0, msg, 1, 6);
+
+        try {
+            SecretKeySpec signKey = new SecretKeySpec(seed16, HMAC_ALGO);
+            Mac mac = Mac.getInstance(HMAC_ALGO);
+            mac.init(signKey);
+            byte[] hash = mac.doFinal(msg);
+
+            long tag = ((hash[0] & 0xFFL) << 24) |
+                       ((hash[1] & 0xFFL) << 16) |
+                       ((hash[2] & 0xFFL) << 8)  |
+                       (hash[3] & 0xFFL);
+            return (tag == 0L) ? 1L : tag;
+        } catch (GeneralSecurityException e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Calcola l'hash SHA-256 (32 byte) dell'immagine firmware .bin.
+     */
+    public static byte[] computeSha256(byte[] data) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            return md.digest(data);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 non disponibile", e);
+        }
+    }
+
+    /**
+     * Costruisce il pacchetto autenticato OP_BEGIN (61 byte) per il canale di controllo BLE GATT OTA:
+     * [0x01] [FwSize(4B BE)] [Counter(4B BE)] [SHA256(32B)] [HMAC_SHA1(20B)]
+     * dove HMAC_SHA1 = HMAC(MasterSeed, "OTA_V1" || TargetMAC(6B) || FwSize(4B) || Counter(4B) || SHA256(32B)).
+     */
+    public static byte[] buildOtaBeginPacket(String secretStr, String targetMac, int fwSize, long authorizedCounter, byte[] sha256_32) {
+        byte[] seed16 = decodeSeed16(secretStr);
+        byte[] mac6 = parseMacBytes(targetMac);
+        if (seed16 == null || mac6 == null || sha256_32 == null || sha256_32.length != 32) {
+            return null;
+        }
+
+        byte[] msg = new byte[52];
+        byte[] prefix = "OTA_V1".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(prefix, 0, msg, 0, 6);
+        System.arraycopy(mac6, 0, msg, 6, 6);
+        msg[12] = (byte) ((fwSize >> 24) & 0xFF);
+        msg[13] = (byte) ((fwSize >> 16) & 0xFF);
+        msg[14] = (byte) ((fwSize >> 8) & 0xFF);
+        msg[15] = (byte) (fwSize & 0xFF);
+        msg[16] = (byte) ((authorizedCounter >> 24) & 0xFF);
+        msg[17] = (byte) ((authorizedCounter >> 16) & 0xFF);
+        msg[18] = (byte) ((authorizedCounter >> 8) & 0xFF);
+        msg[19] = (byte) (authorizedCounter & 0xFF);
+        System.arraycopy(sha256_32, 0, msg, 20, 32);
+
+        try {
+            SecretKeySpec signKey = new SecretKeySpec(seed16, HMAC_ALGO);
+            Mac mac = Mac.getInstance(HMAC_ALGO);
+            mac.init(signKey);
+            byte[] hmac20 = mac.doFinal(msg);
+
+            byte[] packet = new byte[61];
+            packet[0] = (byte) 0x01; // OTA_OP_BEGIN
+            packet[1] = msg[12];
+            packet[2] = msg[13];
+            packet[3] = msg[14];
+            packet[4] = msg[15];
+            packet[5] = msg[16];
+            packet[6] = msg[17];
+            packet[7] = msg[18];
+            packet[8] = msg[19];
+            System.arraycopy(sha256_32, 0, packet, 9, 32);
+            System.arraycopy(hmac20, 0, packet, 41, 20);
+            return packet;
+        } catch (GeneralSecurityException e) {
+            return null;
+        }
+    }
+
+    /**
      * Costruisce il payload Manufacturer Specific Data (17 byte, +2 byte CompanyID = 19 byte) per:
      * - CMD_TRIGGER (0x01)
      * - CMD_ENTER_PAIRING (0x02)
+     * - CMD_ENTER_OTA (0x03)
      * - CMD_TIME_SYNC (0xFF)
      */
     public static byte[] buildCommandPayload(byte cmdByte, String targetMac, int clientId, String secretStr, long counterOrTs) {

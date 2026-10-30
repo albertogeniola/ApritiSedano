@@ -86,6 +86,26 @@ public class DeviceManager {
     }
 
     /**
+     * Updates the persisted Master OTA status of a device only if it actually changed.
+     * @return true if the value changed and was persisted, false otherwise.
+     */
+    public static synchronized boolean updateMasterStatus(Context context, String macAddress, boolean isMaster) {
+        if (macAddress == null) return false;
+        List<Device> devices = getDevices(context);
+        for (Device d : devices) {
+            if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
+                if (d.isMaster() != isMaster) {
+                    d.setMaster(isMaster);
+                    saveDevices(context, devices);
+                    return true;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Increments the rolling code counter for the given device MAC and persists it immediately.
      * @return The new incremented counter value, or -1 if device not found.
      */

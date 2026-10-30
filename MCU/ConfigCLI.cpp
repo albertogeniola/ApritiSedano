@@ -1,7 +1,8 @@
 #include "ConfigCLI.h"
 #include "RollingCodeManager.h"
 #include "BleHandler.h"
-#include <WiFi.h>
+#include "LedIndicator.h"
+#include "BuzzerManager.h"
 #include <sys/time.h>
 #include "RTCManager.h"
 #include "esp_system.h"
@@ -38,86 +39,126 @@ String ConfigCLI::readString() {
 
 void ConfigCLI::showMenu() {
     Serial.println("\n--- MENU DI CONFIGURAZIONE ---");
-    Serial.println("1. Sincronizza orologio via Wi-Fi (NTP)");
+    Serial.println("1. Configura Master App per OTA (Identificazione Live - Relè Disabilitato)");
     Serial.println("2. Attiva Modalità Accoppiamento BLE (60s per nuovo smartphone)");
     Serial.println("3. Aggiorna orologio RTC manualmente (Timestamp)");
     Serial.println("4. Esci dal menu e avvia sistema");
-    Serial.println("5. Riavvia in modalità BOOTLOADER (per flash firmware)");
+    Serial.println("5. Riavvia in modalità BOOTLOADER (per flash firmware via USB)");
     Serial.println("6. Leggi lo storico delle operazioni (Logs)");
     Serial.println("7. Svuota lo storico delle operazioni (Clear Logs)");
-    Serial.println("8. Mostra informazioni di sistema e memoria (SysInfo)");
+    Serial.println("8. Mostra informazioni di sistema, partizioni OTA e memoria (SysInfo)");
     Serial.println("9. Commuta Antenna (Interna / Esterna)");
     Serial.println("10. Gestisci Smartphone Associati (Lista / Rimuovi / Reset)");
     Serial.print("Scelta: ");
 }
 
-static void shutdownWiFi() {
-    WiFi.scanDelete();
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    Serial.println("Wi-Fi disabled.");
-}
+void ConfigCLI::configureMasterClient() {
+    Serial.println("\n==========================================================================");
+    Serial.println(" CONFIGURAZIONE MASTER APP PER OTA (MODALITA' IDENTIFICAZIONE LIVE)");
+    Serial.println("==========================================================================");
+    Serial.println("[SICUREZZA - RELE' DISABILITATO]");
+    Serial.println("Finché ti trovi in questo sottomenu, l'azionamento fisico del relè è");
+    Serial.println("COMPLETAMENTE DISABILITATO: premere APRI o CHIUDI sull'app NON azionerà");
+    Serial.println("mai il relè del cancello/porta!");
+    Serial.println("In questa modalità l'azione APRI / CHIUDI viene usata esclusivamente per");
+    Serial.println("aggiornare l'ultimo evento osservato e identificare il seed dell'app.");
+    Serial.println("");
+    Serial.println("ISTRUZIONI:");
+    Serial.println(" - Premi APRI / CHIUDI sull'app per vedere quale slot si aggiorna qui sotto.");
+    Serial.println(" - Digita [0..15] + Invio per impostare quello slot come MASTER APP (OTA).");
+    Serial.println(" - Digita [NONE]  + Invio per revocare il ruolo Master da tutti gli slot.");
+    Serial.println(" - Digita [L]     + Invio per ristampare la tabella aggiornata.");
+    Serial.println(" - Digita [Q]     + Invio per uscire e tornare al menu principale.");
+    Serial.println("==========================================================================");
 
-void ConfigCLI::syncNTP() {
-    Serial.println("\nScanning Wi-Fi networks...");
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    int n = WiFi.scanNetworks();
-    if (n <= 0) {
-        Serial.println("No networks found.");
-        shutdownWiFi();
-        return;
-    }
-    for (int i = 0; i < n; ++i) {
-        Serial.printf("%d: %s (%d dBm)\n", i, WiFi.SSID(i).c_str(), WiFi.RSSI(i));
-    }
-    Serial.print("Select network index: ");
-    String idxStr = readString();
-    int idx = idxStr.toInt();
-    if (idx < 0 || idx >= n) {
-        Serial.println("Invalid index.");
-        shutdownWiFi();
-        return;
-    }
-    String selectedSSID = WiFi.SSID(idx);
-    WiFi.scanDelete();
+    RollingCodeManager::consumeCliEventUpdate();
+    RollingCodeManager::printClientsWithEvents();
 
-    Serial.print("Enter password (leave empty if open): ");
-    String pwd = readString();
+    // Attiva ascolto BLE con interblocco di sicurezza sul relè
+    BleHandler::setIdentifyOnlyMode(true);
+    BleHandler::resume();
 
-    Serial.printf("Connecting to %s...\n", selectedSSID.c_str());
-    if (pwd.length() > 0) {
-        WiFi.begin(selectedSSID.c_str(), pwd.c_str());
-    } else {
-        WiFi.begin(selectedSSID.c_str());
+    String input = "";
+    bool exitSubmenu = false;
+    Serial.print("\nComando Master ([0..15] / NONE / L / Q): ");
+
+    while (!exitSubmenu) {
+        BleHandler::loop();
+        LedIndicator::loop();
+        BuzzerManager::loop();
+
+        if (RollingCodeManager::consumeCliEventUpdate()) {
+            Serial.println("\n\n>>> [EVENTO RILEVATO DALL'APP - RELE' NON AZIONATO] <<<");
+            RollingCodeManager::printClientsWithEvents();
+            Serial.print("\nComando Master ([0..15] / NONE / L / Q): ");
+            if (input.length() > 0) {
+                Serial.print(input);
+            }
+        }
+
+        while (Serial.available()) {
+            char c = Serial.read();
+            if (c == '\n' || c == '\r') {
+                if (input.length() > 0) {
+                    String cmd = input;
+                    input = "";
+                    cmd.trim();
+                    cmd.toUpperCase();
+                    Serial.println(cmd);
+
+                    if (cmd == "Q") {
+                        exitSubmenu = true;
+                        break;
+                    } else if (cmd == "L") {
+                        RollingCodeManager::printClientsWithEvents();
+                    } else if (cmd == "NONE") {
+                        RollingCodeManager::setMasterSlot(-1);
+                        Logger::logOperation("MASTER_OTA_REVOCATO");
+                        Serial.println(">>> Ruolo Master OTA revocato da tutti gli slot. <<<");
+                        // Aggiorna subito il beacon BLE così l'app nasconde la voce OTA
+                        BleHandler::resume();
+                        RollingCodeManager::printClientsWithEvents();
+                    } else {
+                        char* endPtr = nullptr;
+                        long slot = strtol(cmd.c_str(), &endPtr, 10);
+                        if (endPtr != cmd.c_str() && *endPtr == '\0' && slot >= 0 && slot < RC_MAX_CLIENTS) {
+                            if (RollingCodeManager::setMasterSlot((int)slot)) {
+                                char logMsg[32];
+                                snprintf(logMsg, sizeof(logMsg), "MASTER_OTA_SLOT_%ld", slot);
+                                Logger::logOperation(logMsg);
+                                Serial.printf(">>> Slot %ld configurato con successo come MASTER APP per OTA! <<<\n", slot);
+                                // Aggiorna subito il MasterTag nel beacon BLE
+                                BleHandler::resume();
+                                RollingCodeManager::printClientsWithEvents();
+                            } else {
+                                Serial.printf("Errore: Lo slot %ld è vuoto. Seleziona uno slot attivo.\n", slot);
+                            }
+                        } else {
+                            Serial.println("Comando non valido. Usa [0..15], NONE, L oppure Q.");
+                        }
+                    }
+
+                    if (!exitSubmenu) {
+                        Serial.print("\nComando Master ([0..15] / NONE / L / Q): ");
+                    }
+                }
+            } else if (c == '\b' || c == 127) {
+                if (input.length() > 0) {
+                    input.remove(input.length() - 1);
+                }
+            } else if (input.length() < 32) {
+                input += c;
+            }
+        }
+
+        delay(10);
     }
 
-    int retries = 0;
-    while (WiFi.status() != WL_CONNECTED && retries < 20) {
-        delay(500);
-        Serial.print(".");
-        retries++;
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("\nFailed to connect.");
-        shutdownWiFi();
-        return;
-    }
-    Serial.println("\nConnected! Syncing NTP...");
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo, 10000)) {
-        Serial.println("Failed to obtain time.");
-    } else {
-        Serial.println("Time synchronized successfully!");
-        Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-
-        time_t now;
-        time(&now);
-        RTCManager::setRTC(now);
-    }
-    shutdownWiFi();
+    // Ripristina stato di pausa BLE del menu CLI e rimuove il flag di identificazione
+    BleHandler::pause();
+    BleHandler::setIdentifyOnlyMode(false);
+    LedIndicator::setState(LED_CONFIG);
+    Serial.println("Uscita dalla modalità identificazione Master.");
 }
 
 void ConfigCLI::managePairedClients() {
@@ -156,7 +197,7 @@ void ConfigCLI::handle() {
         String choice = readString();
         Serial.println(choice);
         if (choice == "1") {
-            syncNTP();
+            configureMasterClient();
         } else if (choice == "2") {
             Serial.println("Uscita dal menu e avvio Modalità Accoppiamento BLE per 60 secondi...");
             BleHandler::enterPairingMode();

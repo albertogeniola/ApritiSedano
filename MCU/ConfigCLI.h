@@ -9,7 +9,7 @@ public:
     static void handle();
 private:
     static void showMenu();
-    static void syncNTP();
+    static void configureMasterClient();
     static void managePairedClients();
     static String readString();
 };

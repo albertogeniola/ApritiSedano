@@ -6,8 +6,8 @@
 // (Seeed Studio XIAO ESP32C6 oppure ESP32-WROOM-32), con possibilità di scelta manuale.
 // ==========================================
 
-#define BOARD_XIAO_ESP32C6
-//#define BOARD_ESP32_WROOM32
+//#define BOARD_XIAO_ESP32C6
+#define BOARD_ESP32_WROOM32
 
 #if defined(CONFIG_IDF_TARGET_ESP32C6) || defined(ARDUINO_XIAO_ESP32C6)
     #undef BOARD_ESP32_WROOM32

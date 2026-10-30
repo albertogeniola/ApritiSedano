@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <time.h>
 
 #define RC_MAX_CLIENTS 16
 #define RC_SEED_SIZE   16
@@ -12,15 +13,26 @@
 // Command bytes in Manufacturer Data payload after [0xE5, 0x02]
 #define RC_CMD_TRIGGER       0x01
 #define RC_CMD_ENTER_PAIRING 0x02
+#define RC_CMD_ENTER_OTA     0x03
 #define RC_CMD_REGISTER_SEED 0xFE
 #define RC_CMD_TIME_SYNC     0xFF
 
+// Per-client persistent flags stored in PairedClient::flags
+#define RC_FLAG_MASTER       0x01
+
 struct PairedClient {
     uint8_t active;
-    uint8_t reserved;
+    uint8_t flags;
     uint16_t clientId;
     uint32_t lastCounter;
     uint8_t seed[RC_SEED_SIZE];
+};
+
+struct SlotRuntimeEvent {
+    bool hasEvent;
+    char label[28];
+    time_t epoch;
+    unsigned long eventMillis;
 };
 
 enum RollingValidationResult {
@@ -45,7 +57,7 @@ public:
     static bool hasAnyClient();
     static int getActiveClientCount();
 
-    // Validates a rolling-code command (0x01 = Trigger, 0x02 = Enter Pairing Mode)
+    // Validates a rolling-code command (0x01 = Trigger, 0x02 = Enter Pairing Mode, 0x03 = Enter OTA Mode)
     static RollingValidationResult validateCommand(
         uint8_t cmdByte,
         const uint8_t* targetMac6,
@@ -68,6 +80,18 @@ public:
     // Checks if a registration packet is a duplicate of a client paired within the last 5s
     static bool isDuplicatePairingBurst(uint16_t clientId, const uint8_t* seed16);
 
+    // Master App (OTA) management & cryptographic tag
+    static int getMasterSlot();
+    static bool setMasterSlot(int slotIndex); // -1 revokes Master from all slots
+    static bool isMasterClient(uint16_t clientId);
+    static bool getMasterSeed(uint8_t* outSeed16, uint16_t* outClientId = nullptr);
+    static uint32_t computeMasterTag(const uint8_t* targetMac6);
+
+    // Runtime event tracking for live Serial CLI seed identification
+    static void recordClientEvent(uint16_t clientId, const char* eventLabel);
+    static bool consumeCliEventUpdate();
+    static void printClientsWithEvents();
+
     // CLI management helpers
     static void printClients();
     static bool removeClientBySlot(int slotIndex);
@@ -83,7 +107,9 @@ public:
 
 private:
     static PairedClient _clients[RC_MAX_CLIENTS];
+    static SlotRuntimeEvent _slotEvents[RC_MAX_CLIENTS];
     static volatile bool _slotDirty[RC_MAX_CLIENTS];
+    static volatile bool _cliEventUpdated;
 
     // Burst deduplication state for commands
     static uint16_t _lastBurstClientId;
