@@ -7,37 +7,35 @@ import android.util.Log;
 
 import com.hoho.android.usbserial.driver.CdcAcmSerialDriver;
 import com.hoho.android.usbserial.driver.Ch34xSerialDriver;
-import com.hoho.android.usbserial.driver.Cp21xxSerialDriver;
-import com.hoho.android.usbserial.driver.FtdiSerialDriver;
 import com.hoho.android.usbserial.driver.ProbeTable;
-import com.hoho.android.usbserial.driver.ProlificSerialDriver;
 import com.hoho.android.usbserial.driver.UsbSerialDriver;
 import com.hoho.android.usbserial.driver.UsbSerialPort;
 import com.hoho.android.usbserial.driver.UsbSerialProber;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Flasher seriale USB per ESP32, ESP32-WROOM ed ESP32-C6 su Android via cavo USB OTG.
- * Implementa il protocollo ROM Bootloader Espressif (SLIP framing, SYNC auto-baud, SPI ATTACH, FLASH BEGIN/DATA/END).
+ * Implementa il protocollo ROM Bootloader Espressif (SLIP framing, SYNC auto-baud, rilevamento chip,
+ * SPI ATTACH, SPI SET PARAMS, FLASH BEGIN/DATA/END e verifica MD5 finale), seguendo il riferimento esptool.
  */
 public class Esp32SerialFlasher {
     private static final String TAG = "Esp32SerialFlasher";
 
     // Opcodes Protocollo Serial ROM Espressif
-    private static final byte ESP_FLASH_BEGIN = 0x02;
-    private static final byte ESP_FLASH_DATA  = 0x03;
-    private static final byte ESP_FLASH_END   = 0x04;
-    private static final byte ESP_MEM_BEGIN   = 0x05;
-    private static final byte ESP_MEM_END     = 0x06;
-    private static final byte ESP_MEM_DATA    = 0x07;
-    private static final byte ESP_SYNC        = 0x08;
-    private static final byte ESP_WRITE_REG   = 0x09;
-    private static final byte ESP_READ_REG    = 0x0A;
-    private static final byte ESP_SPI_ATTACH  = 0x0D;
+    private static final byte ESP_FLASH_BEGIN     = 0x02;
+    private static final byte ESP_FLASH_DATA      = 0x03;
+    private static final byte ESP_FLASH_END       = 0x04;
+    private static final byte ESP_SYNC            = 0x08;
+    private static final byte ESP_READ_REG        = 0x0A;
+    private static final byte ESP_SPI_SET_PARAMS  = 0x0B;
+    private static final byte ESP_SPI_ATTACH      = 0x0D;
+    private static final byte ESP_SPI_FLASH_MD5   = 0x13;
 
     // SLIP Delimitatori (RFC 1055)
     private static final byte SLIP_END     = (byte) 0xC0;
@@ -46,7 +44,23 @@ public class Esp32SerialFlasher {
     private static final byte SLIP_ESC_ESC = (byte) 0xDD;
 
     private static final int DEFAULT_BAUD_RATE = 115200;
-    private static final int FLASH_BLOCK_SIZE  = 1024; // Dimensione blocco compatibile universale con tutti i ROM loader
+    private static final int FLASH_BLOCK_SIZE  = 0x400; // FLASH_WRITE_SIZE del ROM loader
+    private static final int FLASH_SECTOR_SIZE = 0x1000;
+    private static final int FLASH_TOTAL_SIZE  = 4 * 1024 * 1024; // XIAO ESP32-C6 ed ESP32-WROOM-32: 4 MB
+
+    // Registro "magic" per il rilevamento del chip (come esptool)
+    private static final int CHIP_DETECT_MAGIC_REG_ADDR = 0x40001000;
+    private static final int MAGIC_ESP32    = 0x00F01D83;
+    private static final int MAGIC_ESP32C6  = 0x2CE0806F;
+    private static final int MAGIC_ESP8266  = 0xFFF0C101;
+
+    // Chip ID nell'header dell'immagine firmware (byte 12..13)
+    private static final int IMAGE_CHIP_ID_ESP32   = 0x0000;
+    private static final int IMAGE_CHIP_ID_ESP32C6 = 0x000D;
+
+    // Timeout ROM (esptool: ERASE_REGION_TIMEOUT_PER_MB = 30, MD5_TIMEOUT_PER_MB = 8)
+    private static final int ERASE_TIMEOUT_MS_PER_MB = 30000;
+    private static final int MD5_TIMEOUT_MS_PER_MB   = 8000;
 
     private volatile boolean mCancelled = false;
 
@@ -55,6 +69,14 @@ public class Esp32SerialFlasher {
         void onProgress(int percent, int writtenBytes, int totalBytes, long bytesPerSec);
         void onSuccess();
         void onError(String errorMessage);
+    }
+
+    /** Informazioni sul chip rilevato tramite il ROM bootloader. */
+    private static class ChipInfo {
+        String name;
+        boolean isEsp32Classic;   // ESP32 originale: FLASH_BEGIN a 4 parametri, bootloader a 0x1000
+        int bootloaderOffset;     // 0x1000 per ESP32, 0x0 per ESP32-C6 e chip successivi
+        int expectedImageChipId;  // -1 se sconosciuto (validazione saltata)
     }
 
     public void cancel() {
@@ -133,6 +155,7 @@ public class Esp32SerialFlasher {
         }
 
         UsbSerialPort port = driver.getPorts().get(0);
+        boolean isNativeUsbJtag = (device.getVendorId() == 0x303A);
 
         try {
             port.open(connection);
@@ -141,34 +164,51 @@ public class Esp32SerialFlasher {
             port.setRTS(false);
 
             callback.onStatus("Riavvio ESP32 in modalità bootloader...");
-            resetIntoBootloader(port);
+            if (isNativeUsbJtag) {
+                resetIntoBootloaderUsbJtag(port);
+            } else {
+                resetIntoBootloaderClassic(port);
+            }
 
             callback.onStatus("Sincronizzazione con il bootloader ROM...");
             syncBootloader(port);
+            checkCancelled();
 
-            if (mCancelled) throw new IOException("Flashing annullato dall'utente.");
+            // 1. Rilevamento chip: determina formato comandi, offset bootloader e chip ID atteso
+            ChipInfo chip = detectChip(port);
+            callback.onStatus("Chip rilevato: " + chip.name);
+            checkCancelled();
+
+            // 2. Prepara e valida l'immagine PRIMA di toccare la flash
+            int writeLen = trimTrailingErasedBytes(firmwareData);
+            validateImage(firmwareData, writeLen, flashOffset, chip);
+            if (writeLen < firmwareData.length) {
+                callback.onStatus(String.format(Locale.US,
+                        "Ottimizzazione: %,d byte finali vuoti (0xFF) non verranno trasmessi.",
+                        firmwareData.length - writeLen));
+            }
 
             callback.onStatus("Configurazione controller SPI Flash...");
             attachSpiFlash(port);
+            setFlashParameters(port);
+            checkCancelled();
 
-            if (mCancelled) throw new IOException("Flashing annullato dall'utente.");
+            // 3. Erase + scrittura
+            int blockCount = (writeLen + FLASH_BLOCK_SIZE - 1) / FLASH_BLOCK_SIZE;
+            int eraseSize = ((writeLen + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE;
 
-            int totalSize = firmwareData.length;
-            int blockCount = (totalSize + FLASH_BLOCK_SIZE - 1) / FLASH_BLOCK_SIZE;
-            int eraseSize = ((totalSize + 4095) / 4096) * 4096;
-
-            callback.onStatus(String.format("Cancellazione memoria flash (%d byte a 0x%05X)...", eraseSize, flashOffset));
-            flashBegin(port, eraseSize, blockCount, FLASH_BLOCK_SIZE, flashOffset);
+            callback.onStatus(String.format(Locale.US, "Cancellazione memoria flash (%,d byte a 0x%05X)...", eraseSize, flashOffset));
+            flashBegin(port, chip, eraseSize, blockCount, flashOffset);
 
             callback.onStatus("Scrittura del firmware in corso...");
             long startTime = System.currentTimeMillis();
             byte[] blockBuffer = new byte[FLASH_BLOCK_SIZE];
 
             for (int seq = 0; seq < blockCount; seq++) {
-                if (mCancelled) throw new IOException("Flashing annullato dall'utente.");
+                checkCancelled();
 
                 int offset = seq * FLASH_BLOCK_SIZE;
-                int len = Math.min(FLASH_BLOCK_SIZE, totalSize - offset);
+                int len = Math.min(FLASH_BLOCK_SIZE, writeLen - offset);
 
                 // Riempi blocco (i byte mancanti vengono riempiti con 0xFF come da specifica flash)
                 int checksum = 0xEF;
@@ -180,16 +220,21 @@ public class Esp32SerialFlasher {
 
                 flashDataBlock(port, blockBuffer, seq, checksum);
 
-                int written = Math.min(totalSize, (seq + 1) * FLASH_BLOCK_SIZE);
+                int written = Math.min(writeLen, (seq + 1) * FLASH_BLOCK_SIZE);
                 int percent = (int) (((long) (seq + 1) * 100) / blockCount);
                 long elapsed = System.currentTimeMillis() - startTime;
                 long speed = (elapsed > 0) ? (written * 1000L / elapsed) : 0;
 
-                callback.onProgress(percent, written, totalSize, speed);
+                callback.onProgress(percent, written, writeLen, speed);
             }
 
+            // 4. Verifica MD5 del contenuto effettivamente scritto in flash
+            callback.onStatus("Verifica integrità (MD5) del firmware scritto...");
+            verifyFlashMd5(port, firmwareData, writeLen, flashOffset);
+            callback.onStatus("Verifica MD5 superata.");
+
             callback.onStatus("Finalizzazione e chiusura sessione flash...");
-            flashEnd(port, false); // reboot = false per consentire reset hardware controllato
+            flashEnd(port);
 
             callback.onStatus("Riavvio hardware dell'ESP32 sul nuovo firmware...");
             hardReset(port);
@@ -209,13 +254,16 @@ public class Esp32SerialFlasher {
         }
     }
 
+    private void checkCancelled() throws IOException {
+        if (mCancelled) throw new IOException("Flashing annullato dall'utente.");
+    }
+
     /**
-     * Esegue la sequenza di reset hardware (toggle DTR/RTS) per portare l'ESP32 in modalità bootloader download.
+     * Sequenza di reset "classica" (circuito a due transistor su DevKit con CP210x/CH340: EN = RTS, IO0 = DTR).
      */
-    private void resetIntoBootloader(UsbSerialPort port) throws IOException, InterruptedException {
-        // Sequenza standard transistor circuit: EN = RTS, IO0 = DTR
+    private void resetIntoBootloaderClassic(UsbSerialPort port) throws IOException, InterruptedException {
         port.setDTR(false);
-        port.setRTS(true); // EN = LOW (Chip in reset)
+        port.setRTS(true);  // EN = LOW (Chip in reset)
         Thread.sleep(100);
 
         port.setDTR(true);  // IO0 = LOW (Bootloader strap attivo)
@@ -225,11 +273,31 @@ public class Esp32SerialFlasher {
         port.setDTR(false); // Rilascia IO0
         Thread.sleep(50);
 
-        // Svuota buffer di ricezione da eventuali messaggi spuri di boot
-        byte[] drain = new byte[1024];
-        while (port.read(drain, 50) > 0) {
-            // svuota
-        }
+        drainInput(port, 200);
+    }
+
+    /**
+     * Sequenza di reset per periferica nativa USB-Serial/JTAG (ESP32-C6/C3/S3), come esptool "USBJTAGSerialReset".
+     */
+    private void resetIntoBootloaderUsbJtag(UsbSerialPort port) throws IOException, InterruptedException {
+        port.setRTS(false);
+        port.setDTR(false); // Idle
+        Thread.sleep(100);
+
+        port.setDTR(true);  // Set IO0
+        port.setRTS(false);
+        Thread.sleep(100);
+
+        port.setRTS(true);  // Reset (transizione via (1,1) invece di (0,0))
+        port.setDTR(false);
+        port.setRTS(true);
+        Thread.sleep(100);
+
+        port.setDTR(false);
+        port.setRTS(false); // Chip fuori dal reset
+        Thread.sleep(150);
+
+        drainInput(port, 200);
     }
 
     /**
@@ -247,22 +315,15 @@ public class Esp32SerialFlasher {
 
         byte[] syncFrame = buildSlipPacket(ESP_SYNC, syncPayload, 0);
 
-        boolean synced = false;
-        int maxAttempts = 15;
-
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            if (mCancelled) throw new IOException("Operazione annullata.");
-
+        for (int attempt = 1; attempt <= 15; attempt++) {
+            checkCancelled();
             port.write(syncFrame, 200);
-
-            // Leggi risposta
             try {
-                SlipResponse resp = readSlipResponse(port, ESP_SYNC, 250);
-                if (resp != null && resp.status == 0) {
-                    synced = true;
-                    // Il bootloader invia spesso risposte di sync aggiuntive: leggiamole per pulire il buffer
-                    drainResponses(port, 100);
-                    break;
+                Response resp = readResponse(port, ESP_SYNC, 250);
+                if (resp != null && resp.data.length >= 2 && resp.data[0] == 0) {
+                    // Il bootloader invia diverse risposte di sync aggiuntive: svuotiamo il buffer
+                    drainInput(port, 150);
+                    return;
                 }
             } catch (Exception ignored) {
                 // Riprova
@@ -270,31 +331,134 @@ public class Esp32SerialFlasher {
             Thread.sleep(80);
         }
 
-        if (!synced) {
-            throw new IOException("Impossibile sincronizzare con l'ESP32. Se necessario, tieni premuto il tasto BOOT sulla scheda e riprova.");
+        throw new IOException("Impossibile sincronizzare con l'ESP32. Se necessario, tieni premuto il tasto BOOT sulla scheda e riprova.");
+    }
+
+    /**
+     * Rileva il tipo di chip leggendo il registro "magic" (come esptool).
+     */
+    private ChipInfo detectChip(UsbSerialPort port) throws IOException {
+        byte[] payload = new byte[4];
+        writeUint32LE(payload, 0, CHIP_DETECT_MAGIC_REG_ADDR);
+        Response resp = sendCommand(port, "Lettura registro identificativo chip", ESP_READ_REG, payload, 0, 0, 3000);
+        int magic = resp.value;
+
+        ChipInfo info = new ChipInfo();
+        if (magic == MAGIC_ESP32) {
+            info.name = "ESP32 (ESP32-WROOM-32)";
+            info.isEsp32Classic = true;
+            info.bootloaderOffset = 0x1000;
+            info.expectedImageChipId = IMAGE_CHIP_ID_ESP32;
+        } else if (magic == MAGIC_ESP8266) {
+            throw new IOException("Rilevato un ESP8266: chip non supportato da questo firmware.");
+        } else {
+            info.isEsp32Classic = false;
+            info.bootloaderOffset = 0x0;
+            if (magic == MAGIC_ESP32C6) {
+                info.name = "ESP32-C6 (XIAO ESP32-C6)";
+                info.expectedImageChipId = IMAGE_CHIP_ID_ESP32C6;
+            } else {
+                info.name = String.format(Locale.US, "ESP32 serie recente (magic 0x%08X)", magic);
+                info.expectedImageChipId = -1;
+            }
+        }
+        return info;
+    }
+
+    /**
+     * Rimuove i byte 0xFF finali (flash già vuota dopo l'erase) allineando a 4 KB, per velocizzare le immagini "merged".
+     */
+    private static int trimTrailingErasedBytes(byte[] data) {
+        int end = data.length;
+        while (end > 0 && data[end - 1] == (byte) 0xFF) {
+            end--;
+        }
+        if (end == 0) return data.length;
+        int aligned = ((end + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE;
+        return Math.min(aligned, data.length);
+    }
+
+    /**
+     * Valida che l'immagine sia coerente con offset e chip rilevato, per non scrivere mai firmware incompatibili.
+     */
+    private void validateImage(byte[] data, int writeLen, int flashOffset, ChipInfo chip) throws IOException {
+        if ((long) flashOffset + writeLen > FLASH_TOTAL_SIZE) {
+            throw new IOException(String.format(Locale.US,
+                    "L'immagine (%,d byte a 0x%X) supera la dimensione della flash (4 MB).", writeLen, flashOffset));
+        }
+        if (flashOffset % FLASH_SECTOR_SIZE != 0) {
+            throw new IOException("L'offset di scrittura deve essere allineato a 4 KB (0x1000).");
+        }
+
+        int headerPos;
+        if (flashOffset == 0) {
+            // Immagine completa "merged": deve contenere il bootloader all'offset corretto per questo chip
+            headerPos = chip.bootloaderOffset;
+        } else if (flashOffset == chip.bootloaderOffset) {
+            headerPos = 0; // solo bootloader
+        } else {
+            headerPos = 0; // immagine applicativa (es. 0x10000)
+        }
+
+        if (data.length < headerPos + 16 || (data[headerPos] & 0xFF) != 0xE9) {
+            if (flashOffset == 0) {
+                throw new IOException(String.format(Locale.US,
+                        "Immagine non compatibile con %s: bootloader non trovato all'offset 0x%X dell'immagine completa.\n" +
+                                "Probabilmente stai usando un'immagine creata per un altro modello di scheda.",
+                        chip.name, headerPos));
+            }
+            throw new IOException("Il file non è un'immagine firmware ESP32 valida (magic byte 0xE9 assente).");
+        }
+
+        int imageChipId = (data[headerPos + 12] & 0xFF) | ((data[headerPos + 13] & 0xFF) << 8);
+        if (chip.expectedImageChipId >= 0 && imageChipId != chip.expectedImageChipId) {
+            throw new IOException(String.format(Locale.US,
+                    "Firmware incompatibile: l'immagine è compilata per un altro chip (chip ID %d), " +
+                            "ma la scheda collegata è %s (chip ID %d).",
+                    imageChipId, chip.name, chip.expectedImageChipId));
         }
     }
 
     /**
-     * Configura il controller SPI Flash inviando ESP_SPI_ATTACH.
+     * Configura il controller SPI Flash inviando ESP_SPI_ATTACH (pin di default).
      */
     private void attachSpiFlash(UsbSerialPort port) throws IOException {
-        byte[] attachPayload = new byte[8]; // 8 zero bytes per pin SPI predefiniti
-        sendCommand(port, "SPI Attach", ESP_SPI_ATTACH, attachPayload, 0, 1500);
+        byte[] attachPayload = new byte[8]; // hspi_arg = 0 (pin di default) + is_legacy = 0 + 3 byte riservati
+        sendCommand(port, "SPI Attach", ESP_SPI_ATTACH, attachPayload, 0, 0, 3000);
+    }
+
+    /**
+     * Comunica al ROM la geometria della flash (4 MB), necessario per scrivere oltre i 2 MB predefiniti.
+     */
+    private void setFlashParameters(UsbSerialPort port) throws IOException {
+        byte[] payload = new byte[24];
+        writeUint32LE(payload, 0, 0);                 // fl_id
+        writeUint32LE(payload, 4, FLASH_TOTAL_SIZE);  // total_size
+        writeUint32LE(payload, 8, 64 * 1024);         // block_size
+        writeUint32LE(payload, 12, FLASH_SECTOR_SIZE);// sector_size
+        writeUint32LE(payload, 16, 256);              // page_size
+        writeUint32LE(payload, 20, 0xFFFF);           // status_mask
+        sendCommand(port, "Impostazione parametri flash", ESP_SPI_SET_PARAMS, payload, 0, 0, 3000);
     }
 
     /**
      * Avvia la sessione di scrittura e cancella la regione di memoria necessaria.
+     * Sui chip successivi all'ESP32 (S2/S3/C3/C6) il ROM richiede un 5° parametro "encrypted":
+     * se omesso il ROM legge un valore indefinito e può scrivere dati cifrati (immagine illeggibile).
      */
-    private void flashBegin(UsbSerialPort port, int eraseSize, int blockCount, int blockSize, int offset) throws IOException {
-        byte[] payload = new byte[16];
+    private void flashBegin(UsbSerialPort port, ChipInfo chip, int eraseSize, int blockCount, int offset) throws IOException {
+        byte[] payload = new byte[chip.isEsp32Classic ? 16 : 20];
         writeUint32LE(payload, 0, eraseSize);
         writeUint32LE(payload, 4, blockCount);
-        writeUint32LE(payload, 8, blockSize);
+        writeUint32LE(payload, 8, FLASH_BLOCK_SIZE);
         writeUint32LE(payload, 12, offset);
+        if (!chip.isEsp32Classic) {
+            writeUint32LE(payload, 16, 0); // encrypted = false
+        }
 
-        // La cancellazione flash richiede più tempo (fino a 25 secondi)
-        sendCommand(port, "Flash Begin", ESP_FLASH_BEGIN, payload, 0, 25000);
+        // Il ROM esegue l'erase completo prima di rispondere (esptool: 30 s per MB)
+        int timeout = timeoutPerMb(ERASE_TIMEOUT_MS_PER_MB, eraseSize);
+        sendCommand(port, "Flash Begin (erase)", ESP_FLASH_BEGIN, payload, 0, 0, timeout);
     }
 
     /**
@@ -308,25 +472,55 @@ public class Esp32SerialFlasher {
         writeUint32LE(payload, 12, 0);
         System.arraycopy(blockData, 0, payload, 16, blockData.length);
 
-        sendCommand(port, "Flash Data Block " + seq, ESP_FLASH_DATA, payload, checksum, 3000);
+        sendCommand(port, "Scrittura blocco " + seq, ESP_FLASH_DATA, payload, checksum, 0, 5000);
     }
 
     /**
-     * Termina la sessione di flash.
+     * Calcola l'MD5 della regione scritta direttamente sul chip e lo confronta con quello atteso.
      */
-    private void flashEnd(UsbSerialPort port, boolean reboot) throws IOException {
-        byte[] payload = new byte[4];
-        writeUint32LE(payload, 0, reboot ? 0 : 1);
+    private void verifyFlashMd5(UsbSerialPort port, byte[] data, int len, int offset) throws IOException {
+        String expected;
         try {
-            sendCommand(port, "Flash End", ESP_FLASH_END, payload, 0, 1500);
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            md.update(data, 0, len);
+            expected = toHex(md.digest());
         } catch (Exception e) {
-            // Alcuni ROM bootloader resettano immediatamente su flash end: non è un errore fatale
+            throw new IOException("Impossibile calcolare l'MD5 locale: " + e.getMessage());
+        }
+
+        byte[] payload = new byte[16];
+        writeUint32LE(payload, 0, offset);
+        writeUint32LE(payload, 4, len);
+        writeUint32LE(payload, 8, 0);
+        writeUint32LE(payload, 12, 0);
+
+        int timeout = timeoutPerMb(MD5_TIMEOUT_MS_PER_MB, len);
+        // Il ROM loader restituisce l'MD5 come 32 caratteri esadecimali ASCII
+        Response resp = sendCommand(port, "Calcolo MD5 flash", ESP_SPI_FLASH_MD5, payload, 0, 32, timeout);
+
+        String actual = new String(resp.data, 0, 32, StandardCharsets.US_ASCII).toLowerCase(Locale.US);
+        if (!expected.equals(actual)) {
+            throw new IOException("Verifica MD5 fallita: il contenuto scritto in flash non corrisponde al file.\n" +
+                    "Atteso: " + expected + "\nLetto:  " + actual + "\nRiprova il flash.");
+        }
+    }
+
+    /**
+     * Termina la sessione di flash restando nel bootloader (il riavvio è gestito da hardReset).
+     */
+    private void flashEnd(UsbSerialPort port) {
+        byte[] payload = new byte[4];
+        writeUint32LE(payload, 0, 1); // 1 = resta nel loader
+        try {
+            sendCommand(port, "Flash End", ESP_FLASH_END, payload, 0, 0, 2000);
+        } catch (Exception e) {
+            // Non fatale: i dati sono già stati scritti e verificati via MD5
             Log.w(TAG, "Avviso su Flash End: " + e.getMessage());
         }
     }
 
     /**
-     * Esegue un hard reset per avviare il firmware appena caricato.
+     * Esegue un hard reset (impulso su EN via RTS) per avviare il firmware appena caricato.
      */
     private void hardReset(UsbSerialPort port) {
         try {
@@ -337,25 +531,66 @@ public class Esp32SerialFlasher {
         } catch (Exception ignored) {}
     }
 
-    private void sendCommand(UsbSerialPort port, String opName, byte opcode, byte[] payload, int checksum, int timeoutMs) throws IOException {
-        byte[] frame = buildSlipPacket(opcode, payload, checksum);
-        port.write(frame, Math.min(timeoutMs, 2000));
+    // ==========================================
+    // TRASPORTO: comandi, risposte, SLIP
+    // ==========================================
 
-        SlipResponse resp = readSlipResponse(port, opcode, timeoutMs);
+    private static class Response {
+        int value;   // campo "val" dell'header di risposta (es. valore registro per READ_REG)
+        byte[] data; // payload della risposta (dati + byte di stato)
+    }
+
+    /**
+     * Invia un comando e verifica il risultato come esptool.check_command:
+     * i byte di stato si trovano subito dopo i dati attesi (respDataLen); il primo byte != 0 indica errore.
+     * Funziona sia con ESP32 (4 byte di stato) sia con i chip recenti (2 byte di stato).
+     */
+    private Response sendCommand(UsbSerialPort port, String opName, byte opcode, byte[] payload,
+                                 int checksum, int respDataLen, int timeoutMs) throws IOException {
+        byte[] frame = buildSlipPacket(opcode, payload, checksum);
+        port.write(frame, 3000);
+
+        Response resp = readResponse(port, opcode, timeoutMs);
         if (resp == null) {
             throw new IOException("Nessuna risposta dal dispositivo per il comando: " + opName);
         }
-        if (resp.status != 0) {
-            throw new IOException(String.format("Errore restituito dall'ESP32 durante '%s' (Codice errore: 0x%02X)", opName, resp.error));
+
+        if (resp.data.length < respDataLen + 2) {
+            if (resp.data.length >= 2 && resp.data[0] != 0) {
+                throw new IOException(describeRomError(opName, resp.data[1] & 0xFF));
+            }
+            throw new IOException("Risposta incompleta dal dispositivo per il comando: " + opName);
         }
+
+        int status = resp.data[respDataLen] & 0xFF;
+        int error = resp.data[respDataLen + 1] & 0xFF;
+        if (status != 0) {
+            throw new IOException(describeRomError(opName, error));
+        }
+        return resp;
     }
 
-    private void drainResponses(UsbSerialPort port, int timeoutMs) {
+    private static String describeRomError(String opName, int error) {
+        String reason;
+        switch (error) {
+            case 0x05: reason = "messaggio ricevuto non valido"; break;
+            case 0x06: reason = "impossibile eseguire il comando"; break;
+            case 0x07: reason = "CRC/checksum non valido"; break;
+            case 0x08: reason = "errore di scrittura flash"; break;
+            case 0x09: reason = "errore di lettura flash"; break;
+            case 0x0A: reason = "lunghezza di lettura flash non valida"; break;
+            case 0x0B: reason = "errore di decompressione"; break;
+            default:   reason = "errore sconosciuto"; break;
+        }
+        return String.format(Locale.US, "Errore restituito dall'ESP32 durante '%s': %s (codice 0x%02X)", opName, reason, error);
+    }
+
+    private void drainInput(UsbSerialPort port, int timeoutMs) {
         long end = System.currentTimeMillis() + timeoutMs;
-        byte[] buf = new byte[256];
+        byte[] buf = new byte[512];
         while (System.currentTimeMillis() < end) {
             try {
-                if (port.read(buf, 20) <= 0) break;
+                if (port.read(buf, 30) <= 0) break;
             } catch (Exception e) {
                 break;
             }
@@ -400,78 +635,78 @@ public class Esp32SerialFlasher {
         return out.toByteArray();
     }
 
-    private static class SlipResponse {
-        byte opcode;
-        int status;
-        int error;
-    }
-
     /**
-     * Legge e decodifica un frame SLIP dalla porta seriale gestendo framing, escaping e timeout.
+     * Legge e decodifica frame SLIP fino a trovare la risposta (direction = 0x01) al comando atteso.
+     * Header risposta: [0] 0x01, [1] opcode, [2..3] size LE, [4..7] value LE, [8..] data (size byte).
      */
-    private SlipResponse readSlipResponse(UsbSerialPort port, byte expectedOpcode, int timeoutMs) throws IOException {
+    private Response readResponse(UsbSerialPort port, byte expectedOpcode, int timeoutMs) throws IOException {
         long deadline = System.currentTimeMillis() + timeoutMs;
         ByteArrayOutputStream packetStream = new ByteArrayOutputStream();
         boolean inFrame = false;
         boolean escaped = false;
-        byte[] readBuf = new byte[256];
+        byte[] readBuf = new byte[512];
 
         while (System.currentTimeMillis() < deadline) {
             int readLen = port.read(readBuf, 50);
-            if (readLen > 0) {
-                for (int i = 0; i < readLen; i++) {
-                    byte b = readBuf[i];
+            for (int i = 0; i < readLen; i++) {
+                byte b = readBuf[i];
 
-                    if (!inFrame) {
-                        if (b == SLIP_END) {
-                            inFrame = true;
-                            packetStream.reset();
-                            escaped = false;
-                        }
-                    } else {
-                        if (b == SLIP_END) {
-                            // Fine pacchetto SLIP
-                            if (packetStream.size() >= 8) {
-                                byte[] packet = packetStream.toByteArray();
-                                byte respDir = packet[0];
-                                byte respOpcode = packet[1];
+                if (!inFrame) {
+                    if (b == SLIP_END) {
+                        inFrame = true;
+                        packetStream.reset();
+                        escaped = false;
+                    }
+                    continue;
+                }
 
-                                if (respDir == 0x01 && (expectedOpcode == 0 || respOpcode == expectedOpcode)) {
-                                    SlipResponse sr = new SlipResponse();
-                                    sr.opcode = respOpcode;
-                                    // Negli ultimi 2 byte del payload il bootloader restituisce [status, error]
-                                    if (packet.length >= 10) {
-                                        sr.status = packet[packet.length - 2] & 0xFF;
-                                        sr.error = packet[packet.length - 1] & 0xFF;
-                                    } else {
-                                        sr.status = 0;
-                                        sr.error = 0;
-                                    }
-                                    return sr;
-                                }
-                            }
-                            // Pacchetto vuoto o non corrispondente, reset per il prossimo
-                            packetStream.reset();
-                            escaped = false;
-                        } else if (escaped) {
-                            if (b == SLIP_ESC_END) {
-                                packetStream.write(SLIP_END);
-                            } else if (b == SLIP_ESC_ESC) {
-                                packetStream.write(SLIP_ESC);
-                            } else {
-                                packetStream.write(b);
-                            }
-                            escaped = false;
-                        } else if (b == SLIP_ESC) {
-                            escaped = true;
-                        } else {
-                            packetStream.write(b);
+                if (b == SLIP_END) {
+                    if (packetStream.size() >= 8) {
+                        byte[] packet = packetStream.toByteArray();
+                        if (packet[0] == 0x01 && packet[1] == expectedOpcode) {
+                            int size = (packet[2] & 0xFF) | ((packet[3] & 0xFF) << 8);
+                            int available = Math.min(size, packet.length - 8);
+                            Response r = new Response();
+                            r.value = (packet[4] & 0xFF) | ((packet[5] & 0xFF) << 8)
+                                    | ((packet[6] & 0xFF) << 16) | ((packet[7] & 0xFF) << 24);
+                            r.data = new byte[Math.max(0, available)];
+                            System.arraycopy(packet, 8, r.data, 0, r.data.length);
+                            return r;
                         }
                     }
+                    // Frame vuoto (doppio 0xC0) o non pertinente: resta "in frame" per il successivo
+                    packetStream.reset();
+                    escaped = false;
+                } else if (escaped) {
+                    if (b == SLIP_ESC_END) {
+                        packetStream.write(SLIP_END);
+                    } else if (b == SLIP_ESC_ESC) {
+                        packetStream.write(SLIP_ESC);
+                    } else {
+                        packetStream.write(b);
+                    }
+                    escaped = false;
+                } else if (b == SLIP_ESC) {
+                    escaped = true;
+                } else {
+                    packetStream.write(b);
                 }
             }
         }
         return null;
+    }
+
+    private static int timeoutPerMb(int msPerMb, int sizeBytes) {
+        long t = (long) msPerMb * sizeBytes / (1024L * 1024L);
+        return (int) Math.max(3000L, t);
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format(Locale.US, "%02x", b & 0xFF));
+        }
+        return sb.toString();
     }
 
     private static void writeUint32LE(byte[] dest, int offset, long val) {
