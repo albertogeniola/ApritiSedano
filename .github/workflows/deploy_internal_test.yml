@@ -33,6 +33,11 @@ jobs:
       - name: Grant Execute Permission to gradlew
         run: chmod +x ApritiSedano/gradlew
 
+      - name: Configure Linux CI Environment
+        run: |
+          # Strip local Windows org.gradle.java.home so Gradle automatically uses the runner's JDK 17
+          sed -i '/org.gradle.java.home/d' ApritiSedano/gradle.properties
+
       - name: Bump Version Code & Inject Date/Time Metadata
         id: versioning
         run: |
