@@ -33,6 +33,8 @@ public class ApritiSedanoOperatingScreen extends Screen implements DefaultLifecy
                     display = "APERTO";
                 } else if ("CLOSED".equals(state)) {
                     display = "CHIUSO";
+                } else if ("ALREADY_TRIGGERED".equals(state)) {
+                    display = "ESEGUITO";
                 }
                 CarToast.makeText(getCarContext(), "Operazione completata: " + display, CarToast.LENGTH_LONG).show();
                 getScreenManager().pop();

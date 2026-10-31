@@ -165,12 +165,12 @@ RollingValidationResult RollingCodeManager::validateCommand(
 
     unsigned long nowMs = millis();
 
-    // Check if this is a repeated BLE advertisement packet from the same 5-second command burst
+    // Check if this is a repeated BLE advertisement packet from the same 180-second command burst
     if (_lastBurstTimeMs != 0 &&
         clientId == _lastBurstClientId &&
         counter == _lastBurstCounter &&
         cmdByte == _lastBurstCmd &&
-        (nowMs - _lastBurstTimeMs < 5000UL)) {
+        (nowMs - _lastBurstTimeMs < 180000UL)) {
         return RC_VALID_DUPLICATE;
     }
 

@@ -366,6 +366,8 @@ public class MainActivity extends AppCompatActivity {
                 } else if ("CLOSED".equals(state)) {
                     if (targetMac != null) deviceAdapter.updateDeviceState(targetMac, 2);
                     Toast.makeText(context, "Operazione completata! Stato: CHIUSO", Toast.LENGTH_SHORT).show();
+                } else if ("ALREADY_TRIGGERED".equals(state)) {
+                    Toast.makeText(context, "Operazione completata! (Comando già ricevuto ed eseguito dal ricevitore)", Toast.LENGTH_SHORT).show();
                 } else if ("PAIRED".equals(state)) {
                     deviceList = DeviceManager.getDevices(context);
                     deviceAdapter.updateDevices(deviceList);

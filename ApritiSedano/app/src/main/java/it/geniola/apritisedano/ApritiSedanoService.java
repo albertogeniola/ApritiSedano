@@ -49,6 +49,7 @@ public class ApritiSedanoService extends Service {
     public static final String ACTION_ENABLE_REMOTE_PAIRING = "ACTION_ENABLE_REMOTE_PAIRING";
     public static final String ACTION_ENTER_OTA = "ACTION_ENTER_OTA";
     public static final String ACTION_SYNC_TIME = "ACTION_SYNC_TIME";
+    public static final String ACTION_STOP = "it.geniola.apritisedano.ACTION_STOP";
 
     public static final String EXTRA_BOX_STATE = "it.geniola.apritisedano.EXTRA_BOX_STATE";
     public static final String EXTRA_TARGET_MAC = "it.geniola.apritisedano.EXTRA_TARGET_MAC";
@@ -59,7 +60,7 @@ public class ApritiSedanoService extends Service {
 
     private static final String CHANNEL_ID = "ApritiSedanoChannel";
     private static final int NOTIFICATION_ID = 101;
-    private static final long COMMAND_TIMEOUT_MS = 5000L; // 5 secondi per trigger/comandi rolling code
+    private static final long COMMAND_TIMEOUT_MS = 180000L; // 180 secondi (3 minuti) per trigger/comandi rolling code
     private static final long PAIRING_TIMEOUT_MS = 8000L; // 8 secondi per registrazione nuovo seed
 
     private static final UUID TARGET_SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0");
@@ -93,7 +94,14 @@ public class ApritiSedanoService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.notification_title)));
+        String action = (intent != null && intent.getAction() != null) ? intent.getAction() : ACTION_TRIGGER;
+        if (ACTION_STOP.equals(action)) {
+            timeoutHandler.removeCallbacksAndMessages(null);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        startForeground(NOTIFICATION_ID, buildNotification("Invio comando in corso (fino a 180s)...", true));
 
         timeoutHandler.removeCallbacksAndMessages(null);
 
@@ -106,7 +114,6 @@ public class ApritiSedanoService extends Service {
 
         operationCompleted = false;
         currentUsedCounter = 0L;
-        String action = (intent != null && intent.getAction() != null) ? intent.getAction() : ACTION_TRIGGER;
         String targetMac = intent != null ? intent.getStringExtra(EXTRA_TARGET_MAC) : null;
         String secretKey = intent != null ? intent.getStringExtra(EXTRA_SECRET_KEY) : null;
         int clientId = intent != null ? intent.getIntExtra(EXTRA_CLIENT_ID, 0) : 0;
@@ -321,8 +328,13 @@ public class ApritiSedanoService extends Service {
                 stopSelf();
             } else if (response.contains("NACK_USED")) {
                 operationCompleted = true;
-                DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "NACK_USED (Seed già usato)"));
-                notifyCompletion("NACK_USED");
+                if (ACTION_TRIGGER.equals(currentAction)) {
+                    DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "NACK_USED -> Riconosciuto come comando già eseguito con successo"));
+                    notifyCompletion("ALREADY_TRIGGERED");
+                } else {
+                    DebugLogger.getInstance().addLog(new DebugLogEntry(System.currentTimeMillis(), false, "", "NACK_USED (Seed già usato)"));
+                    notifyCompletion("NACK_USED");
+                }
                 stopSelf();
             } else if (response.contains("NACK_ERR")) {
                 operationCompleted = true;
@@ -340,6 +352,8 @@ public class ApritiSedanoService extends Service {
             msg = "Operazione completata. Stato box: APERTO";
         } else if ("CLOSED".equals(resultState)) {
             msg = "Operazione completata. Stato box: CHIUSO";
+        } else if ("ALREADY_TRIGGERED".equals(resultState)) {
+            msg = "Operazione completata. Comando già ricevuto ed eseguito dal ricevitore!";
         } else if ("PAIRED".equals(resultState)) {
             msg = "Smartphone associato con successo al ricevitore!";
         } else if ("PAIR_MODE_ENABLED".equals(resultState)) {
@@ -356,7 +370,7 @@ public class ApritiSedanoService extends Service {
             msg = getString(R.string.failure_message);
         }
         if (manager != null) {
-            manager.notify(NOTIFICATION_ID + 1, buildNotification(msg));
+            manager.notify(NOTIFICATION_ID + 1, buildNotification(msg, false));
         }
 
         Intent intent = new Intent(ACTION_OPERATION_RESULT);
@@ -383,13 +397,25 @@ public class ApritiSedanoService extends Service {
         }
     }
 
-    private Notification buildNotification(String contentText) {
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
+    private Notification buildNotification(String contentText, boolean isRunning) {
+        androidx.core.app.NotificationCompat.Builder builder = new androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(getString(R.string.app_name))
                 .setContentText(contentText)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .build();
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW);
+
+        if (isRunning) {
+            Intent stopIntent = new Intent(this, ApritiSedanoService.class);
+            stopIntent.setAction(ACTION_STOP);
+            int flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                flags |= android.app.PendingIntent.FLAG_IMMUTABLE;
+            }
+            android.app.PendingIntent stopPendingIntent = android.app.PendingIntent.getService(this, 102, stopIntent, flags);
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Interrompi", stopPendingIntent);
+        }
+
+        return builder.build();
     }
 
     @Override
