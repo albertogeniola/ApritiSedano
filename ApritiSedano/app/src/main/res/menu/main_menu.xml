@@ -21,4 +21,8 @@
         android:id="@+id/action_flash_cable"
         android:title="Flash Firmware via Cavo USB"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/action_about"
+        android:title="Informazioni e Versione"
+        app:showAsAction="never" />
 </menu>

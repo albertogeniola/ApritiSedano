@@ -13,6 +13,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -156,6 +157,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action) || UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
                 updateUsbUiState();
+        setupAppVersionFooter();
             }
         }
     };
@@ -1729,8 +1731,55 @@ public class MainActivity extends AppCompatActivity {
         } else if (id == R.id.action_debug_mode) {
             startActivity(new Intent(this, DebugActivity.class));
             return true;
+        } else if (id == R.id.action_about) {
+            showAboutDialog();
+            return true;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    private void setupAppVersionFooter() {
+        TextView tvAppVersion = findViewById(R.id.tv_app_version);
+        if (tvAppVersion != null) {
+            String versionName = getAppVersionString();
+            tvAppVersion.setText("Versione " + versionName);
+            tvAppVersion.setOnClickListener(v -> showAboutDialog());
+        }
+    }
+
+    private String getAppVersionString() {
+        try {
+            PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return pInfo.versionName != null ? pInfo.versionName : "1.0";
+        } catch (Exception e) {
+            return "1.0";
+        }
+    }
+
+    private void showAboutDialog() {
+        String versionName = "Sconosciuta";
+        long versionCode = 0;
+        try {
+            PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+            if (pInfo.versionName != null) {
+                versionName = pInfo.versionName;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                versionCode = pInfo.getLongVersionCode();
+            } else {
+                versionCode = pInfo.versionCode;
+            }
+        } catch (Exception ignored) {
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("ApritiSedano")
+                .setMessage("Versione installata:\n" + versionName + "\n\n"
+                        + "Codice build: " + versionCode + "\n"
+                        + "Package: " + getPackageName() + "\n\n"
+                        + "Puoi verificare la presenza di nuove build nella scheda Test Interno del Play Store.")
+                .setPositiveButton("Chiudi", null)
+                .show();
     }
 
     // ==========================================
