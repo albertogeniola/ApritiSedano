@@ -23,13 +23,25 @@ public class DeviceManager {
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build();
 
-        return EncryptedSharedPreferences.create(
-                context,
-                PREFS_FILENAME,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        );
+        try {
+            return EncryptedSharedPreferences.create(
+                    context,
+                    PREFS_FILENAME,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            );
+        } catch (Exception e) {
+            android.util.Log.e("DeviceManager", "Corrupted EncryptedSharedPreferences detected (Keystore key mismatch from reinstall/backup). Recreating clean prefs...", e);
+            context.deleteSharedPreferences(PREFS_FILENAME);
+            return EncryptedSharedPreferences.create(
+                    context,
+                    PREFS_FILENAME,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            );
+        }
     }
 
     public static synchronized List<Device> getDevices(Context context) {
