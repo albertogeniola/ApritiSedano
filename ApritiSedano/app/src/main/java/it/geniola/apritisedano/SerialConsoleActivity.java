@@ -60,7 +60,9 @@ public class SerialConsoleActivity extends AppCompatActivity {
             String action = intent.getAction();
             if (ACTION_USB_PERMISSION.equals(action)) {
                 synchronized (this) {
-                    UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                    UsbDevice device = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                            ? intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class)
+                            : intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                         if (device != null) {
                             appendTerminalText("[Permesso USB concesso. Connessione in corso...]\n");
@@ -197,8 +199,9 @@ public class SerialConsoleActivity extends AppCompatActivity {
         if (!mUsbManager.hasPermission(usbDevice)) {
             updateStatus("Richiesta autorizzazione USB...", false);
             appendTerminalText("[Richiesta autorizzazione USB in corso...]\n");
-            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_MUTABLE : 0;
-            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), flags);
+            Intent intent = new Intent(ACTION_USB_PERMISSION).setPackage(getPackageName());
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0;
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, intent, flags);
             mUsbManager.requestPermission(usbDevice, permissionIntent);
             return;
         }
