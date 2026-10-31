@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+// Configurazione release per Google Play Internal Testing
 android {
     namespace = "it.geniola.apritisedano"
     compileSdk {
