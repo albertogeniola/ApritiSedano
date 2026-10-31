@@ -452,7 +452,25 @@ public class MainActivity extends AppCompatActivity {
 
         ImageView ivFlashCable = findViewById(R.id.iv_flash_cable);
         if (ivFlashCable != null) {
-            ivFlashCable.setOnClickListener(v -> showCableFlashDialog());
+            ivFlashCable.setOnClickListener(v -> {
+                if (DeviceManager.hasMasterDevice(this)) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("Strumenti USB / Cavo OTG")
+                            .setItems(new CharSequence[]{
+                                    "Menu Seriale di Configurazione (CLI)",
+                                    "Flash Firmware via Cavo USB (OTG)"
+                            }, (dialog, which) -> {
+                                if (which == 0) {
+                                    startActivity(new Intent(this, SerialConsoleActivity.class));
+                                } else {
+                                    showCableFlashDialog();
+                                }
+                            })
+                            .show();
+                } else {
+                    showCableFlashDialog();
+                }
+            });
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -692,22 +710,23 @@ public class MainActivity extends AppCompatActivity {
         Device fresh = DeviceManager.getDeviceByMac(this, device.getMacAddress());
         final Device currentDevice = (fresh != null) ? fresh : device;
 
-        final String optPairing = "Attiva Modalità Accoppiamento";
-        final String optOta     = "Aggiornamento Firmware (OTA)";
-        final String optCable   = "Flash Firmware via Cavo USB (OTG)";
-        final String optDebug   = "Debug Dispositivo";
-        final String optNfc     = "Scrivi Tag NFC";
-        final String optQr      = "Mostra QR Backup Dispositivo";
-        final String optRtc     = "Sincronizza Orologio RTC";
-        final String optDelete  = "Elimina Dispositivo";
+        final String optPairing    = "Attiva Modalità Accoppiamento";
+        final String optOta        = "Aggiornamento Firmware (OTA)";
+        final String optSerialMenu = "Menu di Configurazione Seriale (USB)";
+        final String optCable      = "Flash Firmware via Cavo USB (OTG)";
+        final String optDebug      = "Debug Dispositivo";
+        final String optNfc        = "Scrivi Tag NFC";
+        final String optQr         = "Mostra QR Backup Dispositivo";
+        final String optRtc        = "Sincronizza Orologio RTC";
+        final String optDelete     = "Elimina Dispositivo";
 
         List<String> optionList = new ArrayList<>();
         optionList.add(optPairing);
-        // La voce OTA è visibile ESCLUSIVAMENTE sugli smartphone configurati come Master sull'MCU
+        // Le voci riservate alla Master App (OTA e CLI seriale) sono visibili ESCLUSIVAMENTE se questo smartphone è Master
         if (currentDevice.isMaster()) {
             optionList.add(optOta);
+            optionList.add(optSerialMenu);
         }
-        optionList.add(optCable);
         optionList.add(optCable);
         optionList.add(optDebug);
         optionList.add(optNfc);
@@ -727,8 +746,8 @@ public class MainActivity extends AppCompatActivity {
                 enableRemotePairingMode(currentDevice);
             } else if (optOta.equals(selected)) {
                 promptSelectOtaFirmware(currentDevice);
-            } else if (optCable.equals(selected)) {
-                showCableFlashDialog();
+            } else if (optSerialMenu.equals(selected)) {
+                startActivity(new Intent(this, SerialConsoleActivity.class));
             } else if (optCable.equals(selected)) {
                 showCableFlashDialog();
             } else if (optDebug.equals(selected)) {
@@ -1654,9 +1673,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    public boolean onPrepareOptionsMenu(Menu menu) {
+        MenuItem itemSerial = menu.findItem(R.id.action_serial_menu);
+        if (itemSerial != null) {
+            itemSerial.setVisible(DeviceManager.hasMasterDevice(this));
+        }
+        return super.onPrepareOptionsMenu(menu);
+    }
+
+    @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         int id = item.getItemId();
-        if (id == R.id.action_flash_cable) {
+        if (id == R.id.action_serial_menu) {
+            startActivity(new Intent(this, SerialConsoleActivity.class));
+            return true;
+        } else if (id == R.id.action_flash_cable) {
             showCableFlashDialog();
             return true;
         } else if (id == R.id.action_debug_mode) {

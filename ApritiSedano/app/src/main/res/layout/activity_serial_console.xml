@@ -1,0 +1,312 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:background="?attr/colorSurface">
+
+    <!-- Top Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:background="?attr/colorPrimary"
+        android:elevation="4dp"
+        android:gravity="center_vertical">
+
+        <ImageButton
+            android:id="@+id/btn_serial_back"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_revert"
+            app:tint="?android:attr/textColorPrimaryInverse"
+            android:contentDescription="Torna indietro" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:layout_marginStart="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Terminale Seriale CLI"
+                android:textColor="?android:attr/textColorPrimaryInverse"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_serial_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="In attesa di connessione USB..."
+                android:textColor="#E0E0E0"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btn_reset_esp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Reset"
+            android:textColor="?attr/colorPrimary"
+            android:backgroundTint="?attr/colorOnPrimary"
+            android:minHeight="36dp"
+            android:paddingHorizontal="8dp"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btn_clear_serial"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Pulisci"
+            android:textColor="?attr/colorPrimary"
+            android:backgroundTint="?attr/colorOnPrimary"
+            android:minHeight="36dp"
+            android:paddingHorizontal="8dp" />
+    </LinearLayout>
+
+    <!-- Terminal Output -->
+    <ScrollView
+        android:id="@+id/sv_terminal"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#121212"
+        android:fillViewport="true"
+        android:scrollbars="vertical">
+
+        <TextView
+            android:id="@+id/tv_terminal_output"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:padding="12dp"
+            android:text="[Inizializzazione terminale USB-OTG...]\n"
+            android:textColor="#00E676"
+            android:textSize="12sp"
+            android:textIsSelectable="true" />
+    </ScrollView>
+
+    <!-- Quick Action Menu Buttons -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#1E1E1E"
+        android:paddingHorizontal="6dp"
+        android:paddingVertical="4dp"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <Button
+                android:id="@+id/btn_quick_conf"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="[conf] Menu"
+                android:textSize="11sp"
+                android:backgroundTint="#FF9800"
+                android:textColor="#000000"
+                android:textStyle="bold"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_1"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="1. Master OTA"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_2"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="2. Pairing BLE"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_3_sync"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="3. Sync Ora (Auto)"
+                android:textSize="11sp"
+                android:backgroundTint="#4CAF50"
+                android:textColor="#FFFFFF"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_4"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="4. Esci Menu"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_5"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="5. Bootloader"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_6"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="6. Leggi Log"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_7"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="7. Svuota Log"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_8"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="8. SysInfo"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_9"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="9. Antenna"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_10"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="10. Smartphone"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_q"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="[Q] Indietro"
+                android:textSize="11sp"
+                android:backgroundTint="#757575"
+                android:textColor="#FFFFFF"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_l"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="[L] Lista"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_none"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="[NONE] Revoca Master"
+                android:textSize="11sp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <Button
+                android:id="@+id/btn_quick_all"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="[ALL] Cancella Tutti"
+                android:textSize="11sp"
+                android:backgroundTint="#D32F2F"
+                android:textColor="#FFFFFF"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <!-- Bottom Command Input Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:background="?attr/colorSurface"
+        android:gravity="center_vertical">
+
+        <EditText
+            android:id="@+id/et_serial_input"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Comando (es: 1, Q, 0, NONE)..."
+            android:inputType="text"
+            android:imeOptions="actionSend"
+            android:maxLines="1"
+            android:padding="10dp"
+            android:textSize="14sp"
+            android:background="@android:drawable/editbox_background" />
+
+        <Button
+            android:id="@+id/btn_serial_send"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Invia"
+            android:layout_marginStart="6dp" />
+
+        <Button
+            android:id="@+id/btn_serial_enter"
+            android:layout_width="48dp"
+            android:layout_height="wrap_content"
+            android:text="↵"
+            android:layout_marginStart="4dp"
+            android:contentDescription="Invio a vuoto" />
+    </LinearLayout>
+
+</LinearLayout>

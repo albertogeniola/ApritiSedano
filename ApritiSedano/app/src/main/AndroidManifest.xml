@@ -72,6 +72,11 @@
         </activity-alias>
 
         <activity android:name=".DebugActivity" android:exported="false" android:label="Debug BLE" />
+        <activity
+            android:name=".SerialConsoleActivity"
+            android:exported="false"
+            android:label="Terminale Seriale CLI"
+            android:windowSoftInputMode="adjustResize" />
 
         <service
             android:name=".ApritiSedanoService"

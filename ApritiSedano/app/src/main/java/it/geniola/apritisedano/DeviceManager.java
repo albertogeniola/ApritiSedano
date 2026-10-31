@@ -106,6 +106,19 @@ public class DeviceManager {
     }
 
     /**
+     * Checks if this smartphone is configured as Master for at least one registered device.
+     */
+    public static synchronized boolean hasMasterDevice(Context context) {
+        List<Device> devices = getDevices(context);
+        for (Device d : devices) {
+            if (d.isMaster()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Increments the rolling code counter for the given device MAC and persists it immediately.
      * @return The new incremented counter value, or -1 if device not found.
      */

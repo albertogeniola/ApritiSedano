@@ -14,6 +14,10 @@
         android:title="Log di Debug BLE"
         app:showAsAction="never" />
     <item
+        android:id="@+id/action_serial_menu"
+        android:title="Menu Seriale di Configurazione (USB)"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_flash_cable"
         android:title="Flash Firmware via Cavo USB"
         app:showAsAction="never" />
