@@ -1,0 +1,140 @@
+name: Deploy Internal Test to Google Play
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ApritiSedano/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    name: Build & Release to Internal Testing
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant Execute Permission to gradlew
+        run: chmod +x ApritiSedano/gradlew
+
+      - name: Bump Version Code & Inject Date/Time Metadata
+        id: versioning
+        run: |
+          GRADLE_FILE="ApritiSedano/app/build.gradle.kts"
+          
+          # Extract current versionCode and base versionName (e.g., 1.4)
+          CURRENT_CODE=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' "$GRADLE_FILE")
+          NEW_CODE=$((CURRENT_CODE + 1))
+          
+          CURRENT_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' "$GRADLE_FILE")
+          # Extract major.minor (e.g. "1.4" from "1.4" or "1.4 (b7 - ...)")
+          BASE_VERSION=$(echo "$CURRENT_NAME" | grep -oP '^[0-9]+\.[0-9]+' || echo "1.4")
+          
+          # Compute date/time metadata (UTC)
+          BUILD_DATE=$(date -u +'%Y-%m-%d %H:%M UTC')
+          NEW_VERSION_NAME="${BASE_VERSION} (b${NEW_CODE} - ${BUILD_DATE})"
+          
+          echo "Bumping versionCode: $CURRENT_CODE -> $NEW_CODE"
+          echo "Setting versionName: $NEW_VERSION_NAME"
+          
+          # Update build.gradle.kts with the new values
+          sed -i -E "s/versionCode\s*=\s*[0-9]+/versionCode = $NEW_CODE/" "$GRADLE_FILE"
+          sed -i -E "s/versionName\s*=\s*\"[^\"]+\"/versionName = \"$NEW_VERSION_NAME\"/" "$GRADLE_FILE"
+          
+          echo "new_version_code=$NEW_CODE" >> $GITHUB_OUTPUT
+          echo "new_version_name=$NEW_VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+
+      - name: Generate Release Notes (What's New)
+        run: |
+          mkdir -p distribution/whatsnew
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          
+          cat <<EOF > distribution/whatsnew/whatsnew-it-IT
+          Test interno - Build #${{ steps.versioning.outputs.new_version_code }}
+          Rilasciato: ${{ steps.versioning.outputs.build_date }}
+          Commit: $COMMIT_MSG
+          EOF
+
+          cat <<EOF > distribution/whatsnew/whatsnew-en-US
+          Internal test - Build #${{ steps.versioning.outputs.new_version_code }}
+          Released: ${{ steps.versioning.outputs.build_date }}
+          Commit: $COMMIT_MSG
+          EOF
+
+      - name: Prepare Release Keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > ApritiSedano/release.keystore
+            echo "has_keystore=true" >> $GITHUB_OUTPUT
+            echo "Keystore successfully decoded."
+          else
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+            echo "Notice: KEYSTORE_BASE64 secret is not set. Bundle will be signed with debug key."
+          fi
+
+      - name: Build Android App Bundle (Release)
+        env:
+          KEYSTORE_FILE: ${{ steps.keystore.outputs.has_keystore == 'true' && 'release.keystore' || '' }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          cd ApritiSedano
+          ./gradlew bundleRelease --no-daemon --stacktrace
+
+      - name: Commit and Push Version Bump to Repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ApritiSedano/app/build.gradle.kts
+          git commit -m "chore(release): bump version to ${{ steps.versioning.outputs.new_version_name }} [skip ci]" || echo "No changes to commit"
+          git push origin main
+
+      - name: Upload Bundle as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-b${{ steps.versioning.outputs.new_version_code }}.aab
+          path: ApritiSedano/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+      - name: Deploy to Google Play (Internal Test Track)
+        if: env.HAS_PLAY_KEY == 'true'
+        uses: r0adkll/upload-google-play@v1
+        env:
+          HAS_PLAY_KEY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: it.geniola.apritisedano
+          releaseFiles: ApritiSedano/app/build/outputs/bundle/release/*.aab
+          track: internal
+          status: completed
+          whatsNewDirectory: distribution/whatsnew
+
+      - name: Notify Missing Play Store Key
+        if: env.HAS_PLAY_KEY != 'true'
+        env:
+          HAS_PLAY_KEY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        run: |
+          echo "::warning::Secret PLAY_SERVICE_ACCOUNT_JSON is not configured in repository settings."
+          echo "The .aab bundle was compiled, versioned, and saved as a workflow artifact, but not published to Google Play."
+          echo "To enable direct publishing, add PLAY_SERVICE_ACCOUNT_JSON in GitHub -> Settings -> Secrets and variables -> Actions."
