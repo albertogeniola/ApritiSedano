@@ -154,6 +154,8 @@ public class MainActivity extends AppCompatActivity {
                         Toast.makeText(MainActivity.this, "Permesso USB negato dall'utente.", Toast.LENGTH_SHORT).show();
                     }
                 }
+            } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action) || UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
+                updateUsbUiState();
             }
         }
     };
@@ -450,14 +452,19 @@ public class MainActivity extends AppCompatActivity {
             ivDebug.setOnClickListener(v -> startActivity(new Intent(this, DebugActivity.class)));
         }
 
+        ImageView ivSerialConsole = findViewById(R.id.iv_serial_console);
+        if (ivSerialConsole != null) {
+            ivSerialConsole.setOnClickListener(v -> startActivity(new Intent(this, SerialConsoleActivity.class)));
+        }
+
         ImageView ivFlashCable = findViewById(R.id.iv_flash_cable);
         if (ivFlashCable != null) {
             ivFlashCable.setOnClickListener(v -> {
-                if (DeviceManager.hasMasterDevice(this)) {
+                if (isSerialDeviceConnected()) {
                     new AlertDialog.Builder(this)
                             .setTitle("Strumenti USB / Cavo OTG")
                             .setItems(new CharSequence[]{
-                                    "Menu Seriale di Configurazione (CLI)",
+                                    "Terminale Seriale (CLI)",
                                     "Flash Firmware via Cavo USB (OTG)"
                             }, (dialog, which) -> {
                                 if (which == 0) {
@@ -473,11 +480,17 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
+        IntentFilter usbFilter = new IntentFilter();
+        usbFilter.addAction(ACTION_USB_PERMISSION);
+        usbFilter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        usbFilter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(usbPermissionReceiver, new IntentFilter(ACTION_USB_PERMISSION), Context.RECEIVER_NOT_EXPORTED);
+            registerReceiver(usbPermissionReceiver, usbFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
-            registerReceiver(usbPermissionReceiver, new IntentFilter(ACTION_USB_PERMISSION));
+            registerReceiver(usbPermissionReceiver, usbFilter);
         }
+
+        updateUsbUiState();
 
         checkAndRequestPermissions();
 
@@ -627,6 +640,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        updateUsbUiState();
         if (nfcAdapter != null) nfcAdapter.enableForegroundDispatch(this, pendingIntent, null, null);
 
         IntentFilter filter = new IntentFilter();
@@ -722,9 +736,11 @@ public class MainActivity extends AppCompatActivity {
 
         List<String> optionList = new ArrayList<>();
         optionList.add(optPairing);
-        // Le voci riservate alla Master App (OTA e CLI seriale) sono visibili ESCLUSIVAMENTE se questo smartphone è Master
         if (currentDevice.isMaster()) {
             optionList.add(optOta);
+        }
+        // Il terminale seriale appare solo se è rilevato un dispositivo seriale USB collegato
+        if (isSerialDeviceConnected()) {
             optionList.add(optSerialMenu);
         }
         optionList.add(optCable);
@@ -1676,9 +1692,29 @@ public class MainActivity extends AppCompatActivity {
     public boolean onPrepareOptionsMenu(Menu menu) {
         MenuItem itemSerial = menu.findItem(R.id.action_serial_menu);
         if (itemSerial != null) {
-            itemSerial.setVisible(DeviceManager.hasMasterDevice(this));
+            itemSerial.setVisible(isSerialDeviceConnected());
         }
         return super.onPrepareOptionsMenu(menu);
+    }
+
+    private boolean isSerialDeviceConnected() {
+        try {
+            UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+            if (usbManager == null) return false;
+            List<UsbSerialDriver> drivers = Esp32SerialFlasher.getAvailableDrivers(usbManager);
+            return drivers != null && !drivers.isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void updateUsbUiState() {
+        boolean connected = isSerialDeviceConnected();
+        ImageView ivSerial = findViewById(R.id.iv_serial_console);
+        if (ivSerial != null) {
+            ivSerial.setVisibility(connected ? View.VISIBLE : View.GONE);
+        }
+        invalidateOptionsMenu();
     }
 
     @Override

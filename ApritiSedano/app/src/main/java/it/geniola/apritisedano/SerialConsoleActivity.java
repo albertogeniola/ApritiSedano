@@ -85,14 +85,6 @@ public class SerialConsoleActivity extends AppCompatActivity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        // Controllo di sicurezza: accesso consentito ESCLUSIVAMENTE alla Master App
-        if (!DeviceManager.hasMasterDevice(this)) {
-            Toast.makeText(this, "Accesso consentito solo alla Master App.", Toast.LENGTH_SHORT).show();
-            finish();
-            return;
-        }
-
         setContentView(R.layout.activity_serial_console);
 
         mUsbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
