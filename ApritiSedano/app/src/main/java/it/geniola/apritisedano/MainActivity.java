@@ -3,6 +3,8 @@ package it.geniola.apritisedano;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
@@ -31,13 +33,18 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelUuid;
+import android.os.PowerManager;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
+import android.text.InputType;
+import android.text.method.PasswordTransformationMethod;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -49,13 +56,18 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.SwitchCompat;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationServices;
+import com.google.android.gms.location.Priority;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.zxing.BarcodeFormat;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
@@ -72,16 +84,22 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final int PERMISSION_REQUEST_CODE = 1001;
+    private static final int PERMISSION_REQUEST_AUTO_OPEN_FG = 1002;
+    private static final int PERMISSION_REQUEST_AUTO_OPEN_BG = 1003;
+    private static final int PERMISSION_REQUEST_GPS_HOME_FIX = 1004;
+    private Runnable pendingHomeFixCallback = null;
     private static final UUID TARGET_SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0");
 
     private RecyclerView rvDevices;
@@ -135,6 +153,29 @@ public class MainActivity extends AppCompatActivity {
             uri -> {
                 if (uri != null) {
                     handleSelectedCableFirmwareUri(uri);
+                }
+            }
+    );
+
+    // Backup & Ripristino Globale (Seed BLE + Shelly + Configurazione Rientro)
+    private byte[] pendingExportBackupBytes = null;
+
+    private final ActivityResultLauncher<String> exportBackupLauncher = registerForActivityResult(
+            new ActivityResultContracts.CreateDocument("application/json"),
+            uri -> {
+                if (uri != null) {
+                    writePendingBackupToUri(uri);
+                } else {
+                    pendingExportBackupBytes = null;
+                }
+            }
+    );
+
+    private final ActivityResultLauncher<String[]> importBackupLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+                if (uri != null) {
+                    handleSelectedBackupImportUri(uri);
                 }
             }
     );
@@ -303,6 +344,13 @@ public class MainActivity extends AppCompatActivity {
             String action = intent.getAction();
             String targetMac = intent.getStringExtra(ApritiSedanoService.EXTRA_TARGET_MAC);
 
+            if (ProximityConfigManager.ACTION_PROXIMITY_STATE_CHANGED.equals(action)) {
+                if (deviceAdapter != null) {
+                    deviceAdapter.notifyDataSetChanged();
+                }
+                return;
+            }
+
             if (ApritiSedanoService.ACTION_SERVICE_STOPPED.equals(action)) {
                 if (targetMac != null && !isOtaSessionInProgress) {
                     deviceAdapter.markActionPending(targetMac, false);
@@ -448,7 +496,12 @@ public class MainActivity extends AppCompatActivity {
         rvDevices.setAdapter(deviceAdapter);
 
         FloatingActionButton fabAdd = findViewById(R.id.fab_add_device);
-        fabAdd.setOnClickListener(v -> showAddDeviceScanDialog());
+        fabAdd.setOnClickListener(v -> showAddDeviceTypeChoiceDialog());
+
+        ImageView ivBackupRestore = findViewById(R.id.iv_backup_restore);
+        if (ivBackupRestore != null) {
+            ivBackupRestore.setOnClickListener(v -> showGlobalBackupMenuDialog());
+        }
 
         ImageView ivDebug = findViewById(R.id.iv_debug_mode);
         if (ivDebug != null) {
@@ -495,6 +548,8 @@ public class MainActivity extends AppCompatActivity {
 
         updateUsbUiState();
         setupAppVersionFooter();
+        CarNotificationHelper.ensureChannels(this);
+        GeofenceHelper.syncGeofences(this);
 
         checkAndRequestPermissions();
 
@@ -618,6 +673,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void onDeviceActionClick(Device device) {
+        if (device.isShellyCloud()) {
+            triggerShellyDeviceFromUi(device);
+            return;
+        }
         if (device.isActionPending()) {
             cancelPendingAction(device);
             return;
@@ -667,6 +726,7 @@ public class MainActivity extends AppCompatActivity {
         IntentFilter filter = new IntentFilter();
         filter.addAction(ApritiSedanoService.ACTION_SERVICE_STOPPED);
         filter.addAction(ApritiSedanoService.ACTION_OPERATION_RESULT);
+        filter.addAction(ProximityConfigManager.ACTION_PROXIMITY_STATE_CHANGED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             registerReceiver(serviceReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -721,7 +781,14 @@ public class MainActivity extends AppCompatActivity {
         if (ApritiSedanoReceiver.ACTION_OPEN_BOX.equals(action)) {
             List<Device> devices = DeviceManager.getDevices(this);
             if (!devices.isEmpty()) {
-                onDeviceActionClick(devices.get(0));
+                Device target = null;
+                for (Device d : devices) {
+                    if (d.isBleMcu()) {
+                        target = d;
+                        break;
+                    }
+                }
+                onDeviceActionClick(target != null ? target : devices.get(0));
             }
             return;
         }
@@ -744,6 +811,11 @@ public class MainActivity extends AppCompatActivity {
     private void showDeviceSettingsDialog(Device device) {
         Device fresh = DeviceManager.getDeviceByMac(this, device.getMacAddress());
         final Device currentDevice = (fresh != null) ? fresh : device;
+
+        if (currentDevice.isShellyCloud()) {
+            showShellyDeviceSettingsDialog(currentDevice);
+            return;
+        }
 
         final String optPairing    = "Attiva Modalità Accoppiamento";
         final String optOta        = "Aggiornamento Firmware (OTA)";
@@ -1622,6 +1694,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void startStateScanning() {
         if (!hasRequiredPermissions() || isOtaSessionInProgress) return;
+        if (!hasAnyBleMcuDevice()) {
+            stopStateScanning();
+            return;
+        }
         BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         if (manager != null && manager.getAdapter() != null) {
             stateScanner = manager.getAdapter().getBluetoothLeScanner();
@@ -1739,6 +1815,25 @@ public class MainActivity extends AppCompatActivity {
             boolean allGranted = true;
             for (int result : grantResults) if (result != PackageManager.PERMISSION_GRANTED) allGranted = false;
             if (allGranted) startStateScanning();
+        } else if (requestCode == PERMISSION_REQUEST_AUTO_OPEN_FG) {
+            ensureAutoOpenPermissionsGuided();
+        } else if (requestCode == PERMISSION_REQUEST_AUTO_OPEN_BG) {
+            GeofenceHelper.syncGeofences(this);
+            if (GeofenceHelper.hasBackgroundLocationPermissions(this)) {
+                Toast.makeText(this, "Posizione 'Consenti sempre' attiva! Geofence rientro registrati.", Toast.LENGTH_SHORT).show();
+                promptBatteryOptimizationHintIfNeeded();
+            } else {
+                Toast.makeText(this, "Attenzione: seleziona 'Consenti sempre' nelle impostazioni Posizione per l'auto-apertura a schermo spento.", Toast.LENGTH_LONG).show();
+            }
+        } else if (requestCode == PERMISSION_REQUEST_GPS_HOME_FIX) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (granted && pendingHomeFixCallback != null) {
+                Runnable cb = pendingHomeFixCallback;
+                pendingHomeFixCallback = null;
+                cb.run();
+            } else {
+                pendingHomeFixCallback = null;
+            }
         }
     }
 
@@ -1830,7 +1925,13 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         int id = item.getItemId();
-        if (id == R.id.action_serial_menu) {
+        if (id == R.id.action_backup_export) {
+            showExportGlobalBackupDialog();
+            return true;
+        } else if (id == R.id.action_backup_import) {
+            startImportGlobalBackupFlow();
+            return true;
+        } else if (id == R.id.action_serial_menu) {
             startActivity(new Intent(this, SerialConsoleActivity.class));
             return true;
         } else if (id == R.id.action_flash_cable) {
@@ -2332,5 +2433,1182 @@ public class MainActivity extends AppCompatActivity {
             try { cableProgressDialog.dismiss(); } catch (Exception ignored) {}
         }
         cableProgressDialog = null;
+    }
+
+    // ==========================================
+    // SHELLY CLOUD & AUTO-APERTURA ANDROID AUTO
+    // ==========================================
+
+    private boolean hasAnyBleMcuDevice() {
+        List<Device> list = (deviceList != null) ? deviceList : DeviceManager.getDevices(this);
+        for (Device d : list) {
+            if (d.isBleMcu()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void showAddDeviceTypeChoiceDialog() {
+        final CharSequence[] choices = new CharSequence[]{
+                "📡 Ricevitore BLE ApritiSedano\nRolling-Code Offline (Box / Basculante)",
+                "☁️ Relè Shelly Cloud\nCancello Condominiale & Auto-Apertura Android Auto",
+                "📥 Importa Backup Globale da File\nRipristina tutti i seed BLE, dispositivi Shelly e impostazioni"
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle("Aggiungi o Importa Dispositivi")
+                .setItems(choices, (dialog, which) -> {
+                    if (which == 0) {
+                        showAddDeviceScanDialog();
+                    } else if (which == 1) {
+                        showShellyDeviceConfigDialog(null);
+                    } else {
+                        startImportGlobalBackupFlow();
+                    }
+                })
+                .setNegativeButton("Annulla", null)
+                .show();
+    }
+
+    private void triggerShellyDeviceFromUi(Device device) {
+        if (device.getShellyUiState() == 1) {
+            return;
+        }
+        final String devKey = device.getMacAddress();
+        deviceAdapter.updateShellyFeedback(devKey, 1, "");
+
+        ShellyCloudClient.triggerDeviceAsync(device, 1, res -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (res.success) {
+                deviceAdapter.updateShellyFeedback(devKey, 2, "Apertura inviata!");
+                Toast.makeText(this, "Apertura inviata a " + device.getName() + "!", Toast.LENGTH_SHORT).show();
+                pairingTimerHandler.postDelayed(() -> {
+                    if (!isFinishing() && !isDestroyed() && deviceAdapter != null) {
+                        deviceAdapter.updateShellyFeedback(devKey, 0, "");
+                    }
+                }, 4500L);
+            } else {
+                deviceAdapter.updateShellyFeedback(devKey, 3, res.message);
+                Toast.makeText(this, "Errore Shelly: " + res.message, Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    private void showShellyDeviceSettingsDialog(Device currentDevice) {
+        final String optConfig   = "Configura Shelly & Auto-Apertura (Android Auto)";
+        final String optCheck    = "Verifica Stato Cloud (Senza Aprire)";
+        final String optTestNotif = "Invia Notifica di Test (Android Auto)";
+        final boolean currentlyArmed = ProximityConfigManager.isArmed(this);
+        final String optToggleArm = currentlyArmed
+                ? "Segna come A Casa (Disarma Rientro)"
+                : "Arma Manualmente Rientro (Test sul Campo)";
+        final String optNfc      = "Scrivi Tag NFC";
+        final String optDebug    = "Log Diagnostica (Cloud & GPS)";
+        final String optDelete   = "Elimina Dispositivo";
+
+        List<String> optionList = new ArrayList<>();
+        optionList.add(optConfig);
+        optionList.add(optCheck);
+        optionList.add(optTestNotif);
+        if (currentDevice.isAutoOpenEnabled()) {
+            optionList.add(optToggleArm);
+        }
+        optionList.add(optNfc);
+        optionList.add(optDebug);
+        optionList.add(optDelete);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        String statusSuffix = currentDevice.isAutoOpenEnabled()
+                ? (currentlyArmed ? " • ARMATO" : " • DISARMATO")
+                : "";
+        builder.setTitle(String.format(
+                Locale.US,
+                "%s (Shelly ID: %s)%s",
+                currentDevice.getName(),
+                currentDevice.getShellyDeviceId(),
+                statusSuffix
+        ));
+
+        builder.setItems(optionList.toArray(new CharSequence[0]), (dialog, which) -> {
+            String selected = optionList.get(which);
+            if (optConfig.equals(selected)) {
+                showShellyDeviceConfigDialog(currentDevice);
+            } else if (optCheck.equals(selected)) {
+                showOperationProgressDialog(
+                        "Verifica Shelly Cloud",
+                        "Controllo raggiungibilità e stato online di " + currentDevice.getName() + " senza azionare il relè...",
+                        "SHELLY_CHECK"
+                );
+                ShellyCloudClient.checkStatusAsync(
+                        currentDevice.getShellyServerUri(),
+                        currentDevice.getShellyAuthKey(),
+                        currentDevice.getShellyDeviceId(),
+                        res -> {
+                            dismissOperationProgressDialog();
+                            pendingModalOperation = null;
+                            showResultAlertDialog(
+                                    res.success ? "Stato Shelly Cloud" : "Errore Shelly Cloud",
+                                    res.message
+                            );
+                        }
+                );
+            } else if (optTestNotif.equals(selected)) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(
+                            this,
+                            new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                            PERMISSION_REQUEST_CODE
+                    );
+                    return;
+                }
+                CarNotificationHelper.showAutoOpenAlert(
+                        this,
+                        "Bentornato a casa!",
+                        currentDevice.resolveAutoOpenMessage()
+                );
+                Toast.makeText(
+                        this,
+                        "Notifica inviata! Se collegato ad Android Auto apparirà come banner sull'auto.",
+                        Toast.LENGTH_LONG
+                ).show();
+            } else if (optToggleArm.equals(selected)) {
+                boolean nextArmed = !ProximityConfigManager.isArmed(this);
+                ProximityConfigManager.setArmed(this, nextArmed);
+                notifyProximityServiceConfigChanged();
+                deviceAdapter.notifyDataSetChanged();
+                Toast.makeText(
+                        this,
+                        nextArmed
+                                ? "Rientro ARMATO manualmente! Al prossimo avvicinamento (< " + currentDevice.getAutoOpenRadiusMeters() + "m) con Android Auto scatterà l'apertura."
+                                : "Rientro DISARMATO (segnato come A Casa).",
+                        Toast.LENGTH_LONG
+                ).show();
+            } else if (optNfc.equals(selected)) {
+                startNfcConfig(currentDevice.getMacAddress());
+            } else if (optDebug.equals(selected)) {
+                startActivity(new Intent(this, DebugActivity.class));
+            } else if (optDelete.equals(selected)) {
+                DeviceManager.removeDevice(this, currentDevice.getMacAddress());
+                deviceList = DeviceManager.getDevices(this);
+                deviceAdapter.updateDevices(deviceList);
+                GeofenceHelper.syncGeofences(this);
+                notifyProximityServiceConfigChanged();
+                Toast.makeText(this, "Dispositivo Shelly eliminato", Toast.LENGTH_SHORT).show();
+            }
+        });
+        builder.show();
+    }
+
+    private void notifyProximityServiceConfigChanged() {
+        if (ProximityConfigManager.isServiceRunning()) {
+            Intent refreshIntent = new Intent(this, ProximityAutoOpenService.class);
+            refreshIntent.setAction(ProximityAutoOpenService.ACTION_REFRESH_CONFIG);
+            try {
+                startService(refreshIntent);
+            } catch (Exception ignored) {
+            }
+        } else if (ProximityConfigManager.hasAnyAutoOpenDevice(this) && ProximityConfigManager.hasHomeLocation(this)) {
+            ProximityAutoOpenService.startMonitoring(this, ProximityAutoOpenService.ACTION_CHECK_CAR_STATE);
+        }
+    }
+
+    private void showShellyDeviceConfigDialog(@Nullable Device existing) {
+        final boolean isEdit = (existing != null);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle(isEdit ? "Configura Dispositivo Shelly" : "Nuovo Relè Shelly Cloud");
+
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(18);
+        container.setPadding(pad, dpToPx(14), pad, pad);
+        scrollView.addView(container);
+
+        // --- SEZIONE 1: CREDENZIALI SHELLY CLOUD ---
+        TextView tvSec1 = new TextView(this);
+        tvSec1.setText("1. Parametri Shelly Cloud (HTTPS Diretto)");
+        tvSec1.setTypeface(null, Typeface.BOLD);
+        tvSec1.setTextSize(15f);
+        tvSec1.setTextColor(Color.parseColor("#1565C0"));
+        container.addView(tvSec1);
+
+        TextView tvCloudHint = new TextView(this);
+        tvCloudHint.setText("Trovi Server URI e Chiave nell'app Shelly → Impostazioni Utente → Chiave di autorizzazione Cloud. Funziona su rete 4G/5G senza VPN.");
+        tvCloudHint.setTextSize(12f);
+        tvCloudHint.setTextColor(Color.parseColor("#616161"));
+        tvCloudHint.setPadding(0, dpToPx(2), 0, dpToPx(8));
+        container.addView(tvCloudHint);
+
+        container.addView(createFieldLabel("Nome Dispositivo:"));
+        EditText etName = new EditText(this);
+        etName.setHint("Es. Cancello Condominiale");
+        etName.setSingleLine(true);
+        etName.setText(isEdit ? existing.getName() : "Cancello Condominiale");
+        container.addView(etName);
+
+        container.addView(createFieldLabel("Device ID Shelly (o entity_id):"));
+        EditText etDeviceId = new EditText(this);
+        etDeviceId.setHint("Es. 485519c93fec");
+        etDeviceId.setSingleLine(true);
+        if (isEdit) {
+            etDeviceId.setText(existing.getShellyDeviceId());
+        }
+        container.addView(etDeviceId);
+
+        container.addView(createFieldLabel("Server Shelly Cloud:"));
+        EditText etServerUri = new EditText(this);
+        etServerUri.setHint("Es. https://shelly-11-eu.shelly.cloud");
+        etServerUri.setSingleLine(true);
+        etServerUri.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        String prefillServer = isEdit ? existing.getShellyServerUri() : ProximityConfigManager.getDefaultShellyServer(this);
+        if (!prefillServer.isEmpty()) {
+            etServerUri.setText(prefillServer);
+        }
+        container.addView(etServerUri);
+
+        container.addView(createFieldLabel("Chiave Autorizzazione Cloud (Auth Key):"));
+        LinearLayout keyRow = new LinearLayout(this);
+        keyRow.setOrientation(LinearLayout.HORIZONTAL);
+        keyRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        EditText etAuthKey = new EditText(this);
+        etAuthKey.setHint("Incolla Auth Key Shelly Cloud");
+        etAuthKey.setSingleLine(true);
+        etAuthKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        etAuthKey.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        String prefillKey = isEdit ? existing.getShellyAuthKey() : ProximityConfigManager.getDefaultShellyAuthKey(this);
+        if (!prefillKey.isEmpty()) {
+            etAuthKey.setText(prefillKey);
+        }
+        keyRow.addView(etAuthKey, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button btnToggleKey = new Button(this);
+        btnToggleKey.setText("Mostra");
+        btnToggleKey.setAllCaps(false);
+        btnToggleKey.setTextSize(11.5f);
+        final boolean[] keyVisible = new boolean[]{false};
+        btnToggleKey.setOnClickListener(v -> {
+            keyVisible[0] = !keyVisible[0];
+            etAuthKey.setTransformationMethod(keyVisible[0] ? null : PasswordTransformationMethod.getInstance());
+            etAuthKey.setSelection(etAuthKey.getText().length());
+            btnToggleKey.setText(keyVisible[0] ? "Nascondi" : "Mostra");
+        });
+        keyRow.addView(btnToggleKey);
+        container.addView(keyRow);
+
+        container.addView(createFieldLabel("Canale Relè (0 per Shelly 1 / 1PM / Plus 1):"));
+        EditText etChannel = new EditText(this);
+        etChannel.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etChannel.setSingleLine(true);
+        etChannel.setText(String.valueOf(isEdit ? existing.getShellyChannel() : 0));
+        container.addView(etChannel);
+
+        TextView tvTestCloudStatus = new TextView(this);
+        tvTestCloudStatus.setTextSize(12.5f);
+        tvTestCloudStatus.setPadding(0, dpToPx(4), 0, dpToPx(4));
+        tvTestCloudStatus.setVisibility(View.GONE);
+
+        Button btnTestCloud = new Button(this);
+        btnTestCloud.setText("🔌 Verifica Connessione Cloud (Senza Aprire)");
+        btnTestCloud.setAllCaps(false);
+        btnTestCloud.setOnClickListener(v -> {
+            String srv = etServerUri.getText().toString().trim();
+            String key = etAuthKey.getText().toString().trim();
+            String id = etDeviceId.getText().toString().trim();
+            if (srv.isEmpty() || key.isEmpty() || id.isEmpty()) {
+                tvTestCloudStatus.setVisibility(View.VISIBLE);
+                tvTestCloudStatus.setTextColor(Color.parseColor("#C62828"));
+                tvTestCloudStatus.setText("Compila Device ID, Server e Auth Key prima del test.");
+                return;
+            }
+            btnTestCloud.setEnabled(false);
+            tvTestCloudStatus.setVisibility(View.VISIBLE);
+            tvTestCloudStatus.setTextColor(Color.parseColor("#1565C0"));
+            tvTestCloudStatus.setText("⏳ Verifica connessione con Shelly Cloud in corso...");
+
+            ShellyCloudClient.checkStatusAsync(srv, key, id, res -> {
+                btnTestCloud.setEnabled(true);
+                if (res.success && res.online) {
+                    tvTestCloudStatus.setTextColor(Color.parseColor("#2E7D32"));
+                    tvTestCloudStatus.setText("🟢 " + res.message);
+                } else if (res.success) {
+                    tvTestCloudStatus.setTextColor(Color.parseColor("#E65100"));
+                    tvTestCloudStatus.setText("🟠 " + res.message);
+                } else {
+                    tvTestCloudStatus.setTextColor(Color.parseColor("#C62828"));
+                    tvTestCloudStatus.setText("🔴 " + res.message);
+                }
+            });
+        });
+        container.addView(btnTestCloud);
+        container.addView(tvTestCloudStatus);
+
+        // --- SEZIONE 2: AUTO-APERTURA AL RIENTRO CON ANDROID AUTO ---
+        View divider = new View(this);
+        divider.setBackgroundColor(Color.parseColor("#E0E0E0"));
+        LinearLayout.LayoutParams divParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(1));
+        divParams.topMargin = dpToPx(14);
+        divParams.bottomMargin = dpToPx(12);
+        container.addView(divider, divParams);
+
+        TextView tvSec2 = new TextView(this);
+        tvSec2.setText("2. Apertura Automatica al Rientro (Android Auto)");
+        tvSec2.setTypeface(null, Typeface.BOLD);
+        tvSec2.setTextSize(15f);
+        tvSec2.setTextColor(Color.parseColor("#2E7D32"));
+        container.addView(tvSec2);
+
+        SwitchCompat swAutoOpen = new SwitchCompat(this);
+        swAutoOpen.setText("Attiva apertura automatica in avvicinamento a casa");
+        swAutoOpen.setTypeface(null, Typeface.BOLD);
+        swAutoOpen.setPadding(0, dpToPx(6), 0, dpToPx(4));
+        swAutoOpen.setChecked(isEdit && existing.isAutoOpenEnabled());
+        container.addView(swAutoOpen);
+
+        TextView tvAutoDesc = new TextView(this);
+        tvAutoDesc.setText("Consumo 0% fuori dall'auto. Quando Android Auto è connesso: GPS rilassato (>3 km) → granulare 15s (<3 km) → tempo reale 1.5s (<1 km in avvicinamento) → apertura e notifica su Android Auto sotto la soglia.");
+        tvAutoDesc.setTextSize(11.5f);
+        tvAutoDesc.setTextColor(Color.parseColor("#616161"));
+        tvAutoDesc.setPadding(0, 0, 0, dpToPx(8));
+        container.addView(tvAutoDesc);
+
+        LinearLayout autoSection = new LinearLayout(this);
+        autoSection.setOrientation(LinearLayout.VERTICAL);
+        autoSection.setVisibility(swAutoOpen.isChecked() ? View.VISIBLE : View.GONE);
+        container.addView(autoSection);
+
+        swAutoOpen.setOnCheckedChangeListener((buttonView, isChecked) ->
+                autoSection.setVisibility(isChecked ? View.VISIBLE : View.GONE));
+
+        // Coordinate Casa
+        autoSection.addView(createFieldLabel("Posizione Casa (Latitudine / Longitudine):"));
+        LinearLayout coordsRow = new LinearLayout(this);
+        coordsRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        EditText etHomeLat = new EditText(this);
+        etHomeLat.setHint("Latitudine (es. 45.4642)");
+        etHomeLat.setSingleLine(true);
+        etHomeLat.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
+
+        EditText etHomeLon = new EditText(this);
+        etHomeLon.setHint("Longitudine (es. 9.1900)");
+        etHomeLon.setSingleLine(true);
+        etHomeLon.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
+
+        if (ProximityConfigManager.hasHomeLocation(this)) {
+            etHomeLat.setText(String.format(Locale.US, "%.6f", ProximityConfigManager.getHomeLatitude(this)));
+            etHomeLon.setText(String.format(Locale.US, "%.6f", ProximityConfigManager.getHomeLongitude(this)));
+        }
+        coordsRow.addView(etHomeLat, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        coordsRow.addView(etHomeLon, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        autoSection.addView(coordsRow);
+
+        TextView tvGpsFixStatus = new TextView(this);
+        tvGpsFixStatus.setTextSize(12f);
+        tvGpsFixStatus.setVisibility(View.GONE);
+
+        Button btnUseCurrentGps = new Button(this);
+        btnUseCurrentGps.setText("📍 Usa Posizione GPS Attuale come Casa");
+        btnUseCurrentGps.setAllCaps(false);
+        btnUseCurrentGps.setOnClickListener(v -> populateCurrentGpsIntoFields(etHomeLat, etHomeLon, tvGpsFixStatus));
+        autoSection.addView(btnUseCurrentGps);
+        autoSection.addView(tvGpsFixStatus);
+
+        // Filtro Bluetooth Auto
+        autoSection.addView(createFieldLabel("Bluetooth Veicolo (per risveglio istantaneo a 0% batteria):"));
+        final String[] selectedCarBtMac = new String[]{ProximityConfigManager.getCarBluetoothMac(this)};
+        final String[] selectedCarBtName = new String[]{ProximityConfigManager.getCarBluetoothName(this)};
+
+        TextView tvSelectedCarBt = new TextView(this);
+        tvSelectedCarBt.setTextSize(13f);
+        tvSelectedCarBt.setTextColor(Color.parseColor("#212121"));
+        tvSelectedCarBt.setPadding(0, dpToPx(2), 0, dpToPx(4));
+        updateCarBtLabelText(tvSelectedCarBt, selectedCarBtMac[0], selectedCarBtName[0]);
+        autoSection.addView(tvSelectedCarBt);
+
+        Button btnPickCarBt = new Button(this);
+        btnPickCarBt.setText("🚘 Seleziona Bluetooth dell'Auto...");
+        btnPickCarBt.setAllCaps(false);
+        btnPickCarBt.setOnClickListener(v ->
+                showCarBluetoothPickerDialog(selectedCarBtMac, selectedCarBtName, tvSelectedCarBt));
+        autoSection.addView(btnPickCarBt);
+
+        // Soglie distanza
+        autoSection.addView(createFieldLabel("Distanza fuori casa per armare il rientro (metri, es. 3000):"));
+        EditText etArmDist = new EditText(this);
+        etArmDist.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etArmDist.setSingleLine(true);
+        etArmDist.setText(String.valueOf(ProximityConfigManager.getArmDistanceMeters(this)));
+        autoSection.addView(etArmDist);
+
+        autoSection.addView(createFieldLabel("Raggio apertura cancello all'arrivo (metri, es. 300):"));
+        EditText etTriggerRadius = new EditText(this);
+        etTriggerRadius.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etTriggerRadius.setSingleLine(true);
+        etTriggerRadius.setText(String.valueOf(isEdit ? existing.getAutoOpenRadiusMeters() : 300));
+        autoSection.addView(etTriggerRadius);
+
+        // Testo Notifica Benvenuto
+        autoSection.addView(createFieldLabel("Messaggio Notifica (Smartphone + Display Android Auto):"));
+        EditText etNotifText = new EditText(this);
+        etNotifText.setHint(Device.DEFAULT_AUTO_OPEN_MESSAGE);
+        String existingMsg = isEdit ? existing.getAutoOpenNotificationText() : Device.DEFAULT_AUTO_OPEN_MESSAGE;
+        etNotifText.setText(existingMsg.isEmpty() ? Device.DEFAULT_AUTO_OPEN_MESSAGE : existingMsg);
+        autoSection.addView(etNotifText);
+
+        TextView tvNotifHint = new TextView(this);
+        tvNotifHint.setText("Suggerimento: puoi inserire %s nel testo per includere automaticamente il nome del varco.");
+        tvNotifHint.setTextSize(11.5f);
+        tvNotifHint.setTextColor(Color.parseColor("#757575"));
+        tvNotifHint.setPadding(0, 0, 0, dpToPx(6));
+        autoSection.addView(tvNotifHint);
+
+        // Modalità Simulazione (Dry-Run)
+        SwitchCompat swDryRun = new SwitchCompat(this);
+        swDryRun.setText("🧪 Modalità Simulazione (invia solo la notifica, NON apre il relè)");
+        swDryRun.setTextSize(13f);
+        swDryRun.setChecked(isEdit && existing.isAutoOpenDryRun());
+        swDryRun.setPadding(0, dpToPx(4), 0, dpToPx(8));
+        autoSection.addView(swDryRun);
+
+        // Stato Armamento Live & Verifica Permessi
+        TextView tvLiveArmStatus = new TextView(this);
+        tvLiveArmStatus.setTextSize(12.5f);
+        tvLiveArmStatus.setTypeface(null, Typeface.BOLD);
+        boolean armedNow = ProximityConfigManager.isArmed(this);
+        tvLiveArmStatus.setText(armedNow
+                ? "Stato attuale rientro: 🟢 ARMATO (pronto all'apertura al rientro)"
+                : "Stato attuale rientro: ⚪ DISARMATO (si armerà superati i " + ProximityConfigManager.getArmDistanceMeters(this) + " m da casa)");
+        tvLiveArmStatus.setTextColor(Color.parseColor(armedNow ? "#2E7D32" : "#616161"));
+        tvLiveArmStatus.setPadding(0, dpToPx(4), 0, dpToPx(6));
+        autoSection.addView(tvLiveArmStatus);
+
+        Button btnCheckPerms = new Button(this);
+        btnCheckPerms.setText("🛡️ Verifica Permessi Posizione ('Consenti sempre') & Batteria");
+        btnCheckPerms.setAllCaps(false);
+        btnCheckPerms.setOnClickListener(v -> ensureAutoOpenPermissionsGuided());
+        autoSection.addView(btnCheckPerms);
+
+        builder.setView(scrollView);
+        builder.setPositiveButton("Salva", null);
+        builder.setNegativeButton("Annulla", (d, w) -> d.dismiss());
+
+        AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String name = etName.getText().toString().trim();
+                String rawDevId = etDeviceId.getText().toString().trim();
+                String rawServer = etServerUri.getText().toString().trim();
+                String authKey = etAuthKey.getText().toString().trim();
+                String chStr = etChannel.getText().toString().trim();
+
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "Inserisci il nome del dispositivo.", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String normDevId = ShellyCloudClient.normalizeDeviceId(rawDevId);
+                if (normDevId.isEmpty()) {
+                    Toast.makeText(this, "Inserisci il Device ID Shelly (es. 485519c93fec).", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String normServer = ShellyCloudClient.normalizeServerUri(rawServer);
+                if (normServer.isEmpty()) {
+                    Toast.makeText(this, "Inserisci il Server Shelly Cloud (es. shelly-11-eu.shelly.cloud).", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (authKey.isEmpty()) {
+                    Toast.makeText(this, "Inserisci la Chiave di Autorizzazione Shelly Cloud.", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                int channel = 0;
+                if (!chStr.isEmpty()) {
+                    try {
+                        channel = Math.max(0, Integer.parseInt(chStr));
+                    } catch (NumberFormatException e) {
+                        Toast.makeText(this, "Canale relè non valido.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                }
+
+                boolean autoEnabled = swAutoOpen.isChecked();
+                int triggerRadius = 300;
+                int armDistance = ProximityConfigManager.DEFAULT_ARM_DISTANCE_METERS;
+                double homeLat = 0.0;
+                double homeLon = 0.0;
+
+                if (autoEnabled) {
+                    String latStr = etHomeLat.getText().toString().trim().replace(',', '.');
+                    String lonStr = etHomeLon.getText().toString().trim().replace(',', '.');
+                    try {
+                        homeLat = Double.parseDouble(latStr);
+                        homeLon = Double.parseDouble(lonStr);
+                    } catch (NumberFormatException e) {
+                        Toast.makeText(this, "Imposta coordinate Casa valide (usa il pulsante GPS o inseriscile).", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (Math.abs(homeLat) > 90.0 || Math.abs(homeLon) > 180.0 || (Math.abs(homeLat) < 0.0001 && Math.abs(homeLon) < 0.0001)) {
+                        Toast.makeText(this, "Coordinate Casa non valide.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    try {
+                        armDistance = Integer.parseInt(etArmDist.getText().toString().trim());
+                    } catch (NumberFormatException e) {
+                        Toast.makeText(this, "Distanza di armamento non valida.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    try {
+                        triggerRadius = Integer.parseInt(etTriggerRadius.getText().toString().trim());
+                    } catch (NumberFormatException e) {
+                        Toast.makeText(this, "Raggio di apertura non valido.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (triggerRadius < 30 || triggerRadius > 2000) {
+                        Toast.makeText(this, "Il raggio di apertura deve essere compreso tra 30 e 2000 metri.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (armDistance < triggerRadius + 200) {
+                        Toast.makeText(this, "La distanza di armamento deve superare il raggio di apertura di almeno 200 m (es. 3000 m).", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    ProximityConfigManager.setHomeLocation(this, homeLat, homeLon);
+                    ProximityConfigManager.setCarBluetoothFilter(this, selectedCarBtMac[0], selectedCarBtName[0]);
+                    ProximityConfigManager.setArmDistanceMeters(this, armDistance);
+                    int realtimeDist = Math.min(armDistance - 100, Math.max(1000, triggerRadius * 2));
+                    ProximityConfigManager.setRealtimeDistanceMeters(this, realtimeDist);
+                }
+
+                ProximityConfigManager.saveDefaultShellyCredentials(this, normServer, authKey);
+
+                String previousMac = isEdit ? existing.getMacAddress() : null;
+                Device savedDevice;
+                if (isEdit) {
+                    savedDevice = existing;
+                    savedDevice.setName(name);
+                    savedDevice.updateShellyIdentity(normDevId, channel);
+                    savedDevice.setShellyServerUri(normServer);
+                    savedDevice.setShellyAuthKey(authKey);
+                } else {
+                    savedDevice = Device.createShellyDevice(name, normDevId, normServer, authKey, channel);
+                }
+
+                savedDevice.setAutoOpenEnabled(autoEnabled);
+                savedDevice.setAutoOpenRadiusMeters(triggerRadius);
+                savedDevice.setAutoOpenDryRun(swDryRun.isChecked());
+                String notifMsg = etNotifText.getText().toString().trim();
+                savedDevice.setAutoOpenNotificationText(notifMsg.isEmpty() ? Device.DEFAULT_AUTO_OPEN_MESSAGE : notifMsg);
+
+                DeviceManager.upsertDevice(this, previousMac, savedDevice);
+                deviceList = DeviceManager.getDevices(this);
+                deviceAdapter.updateDevices(deviceList);
+                startStateScanning();
+
+                GeofenceHelper.syncGeofences(this);
+                notifyProximityServiceConfigChanged();
+
+                dialog.dismiss();
+                Toast.makeText(this, "Dispositivo Shelly salvato!", Toast.LENGTH_SHORT).show();
+
+                if (autoEnabled) {
+                    ensureAutoOpenPermissionsGuided();
+                }
+            });
+        });
+        dialog.show();
+    }
+
+    private TextView createFieldLabel(String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(12.5f);
+        tv.setTypeface(null, Typeface.BOLD);
+        tv.setTextColor(Color.parseColor("#424242"));
+        tv.setPadding(0, dpToPx(8), 0, dpToPx(2));
+        return tv;
+    }
+
+    private void updateCarBtLabelText(TextView tv, String mac, String name) {
+        if (mac == null || mac.isEmpty()) {
+            tv.setText("Selezionato: Qualsiasi connessione Bluetooth Auto + verifica Android Auto");
+        } else {
+            String displayName = (name != null && !name.isEmpty()) ? name : "Veicolo";
+            tv.setText("Selezionato: " + displayName + " (" + mac + ")");
+        }
+    }
+
+    private void populateCurrentGpsIntoFields(EditText etLat, EditText etLon, TextView tvStatus) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingHomeFixCallback = () -> populateCurrentGpsIntoFields(etLat, etLon, tvStatus);
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                    PERMISSION_REQUEST_GPS_HOME_FIX
+            );
+            return;
+        }
+
+        tvStatus.setVisibility(View.VISIBLE);
+        tvStatus.setTextColor(Color.parseColor("#1565C0"));
+        tvStatus.setText("⏳ Acquisizione posizione GPS ad alta precisione...");
+
+        FusedLocationProviderClient fused = LocationServices.getFusedLocationProviderClient(this);
+        try {
+            fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                    .addOnSuccessListener(loc -> {
+                        if (loc != null) {
+                            etLat.setText(String.format(Locale.US, "%.6f", loc.getLatitude()));
+                            etLon.setText(String.format(Locale.US, "%.6f", loc.getLongitude()));
+                            tvStatus.setTextColor(Color.parseColor("#2E7D32"));
+                            tvStatus.setText(String.format(Locale.US, "🟢 Posizione acquisita (precisione ±%.0f m)", loc.getAccuracy()));
+                        } else {
+                            fused.getLastLocation().addOnSuccessListener(last -> {
+                                if (last != null) {
+                                    etLat.setText(String.format(Locale.US, "%.6f", last.getLatitude()));
+                                    etLon.setText(String.format(Locale.US, "%.6f", last.getLongitude()));
+                                    tvStatus.setTextColor(Color.parseColor("#2E7D32"));
+                                    tvStatus.setText(String.format(Locale.US, "🟢 Ultima posizione nota usata (±%.0f m)", last.getAccuracy()));
+                                } else {
+                                    tvStatus.setTextColor(Color.parseColor("#C62828"));
+                                    tvStatus.setText("🔴 Impossibile ottenere il fix GPS. Verifica che la Posizione sia attiva.");
+                                }
+                            });
+                        }
+                    })
+                    .addOnFailureListener(e -> {
+                        tvStatus.setTextColor(Color.parseColor("#C62828"));
+                        tvStatus.setText("🔴 Errore GPS: " + e.getMessage());
+                    });
+        } catch (SecurityException se) {
+            tvStatus.setTextColor(Color.parseColor("#C62828"));
+            tvStatus.setText("🔴 Permesso posizione mancante.");
+        }
+    }
+
+    private void showCarBluetoothPickerDialog(String[] selectedMacHolder, String[] selectedNameHolder, TextView tvSelectedBt) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{Manifest.permission.BLUETOOTH_CONNECT},
+                    PERMISSION_REQUEST_CODE
+            );
+            Toast.makeText(this, "Concedi il permesso Bluetooth e riprova.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        List<String> labels = new ArrayList<>();
+        List<String> macs = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+
+        labels.add("Qualsiasi veicolo (verifica automatica Android Auto)");
+        macs.add("");
+        names.add("");
+
+        try {
+            BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            BluetoothAdapter adapter = (bm != null) ? bm.getAdapter() : null;
+            if (adapter != null) {
+                Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+                if (bonded != null) {
+                    for (BluetoothDevice bd : bonded) {
+                        String bName = bd.getName() != null ? bd.getName() : "Dispositivo Bluetooth";
+                        String bMac = bd.getAddress() != null ? bd.getAddress() : "";
+                        if (!bMac.isEmpty()) {
+                            labels.add("🚘 " + bName + "\n" + bMac);
+                            macs.add(bMac);
+                            names.add(bName);
+                        }
+                    }
+                }
+            }
+        } catch (SecurityException ignored) {
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("Seleziona Bluetooth dell'Auto")
+                .setItems(labels.toArray(new CharSequence[0]), (d, which) -> {
+                    selectedMacHolder[0] = macs.get(which);
+                    selectedNameHolder[0] = names.get(which);
+                    updateCarBtLabelText(tvSelectedBt, selectedMacHolder[0], selectedNameHolder[0]);
+                })
+                .setNegativeButton("Annulla", null)
+                .show();
+    }
+
+    private void ensureAutoOpenPermissionsGuided() {
+        List<String> fgMissing = new ArrayList<>();
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            fgMissing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED) {
+            fgMissing.add(Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            fgMissing.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+
+        if (!fgMissing.isEmpty()) {
+            ActivityCompat.requestPermissions(
+                    this,
+                    fgMissing.toArray(new String[0]),
+                    PERMISSION_REQUEST_AUTO_OPEN_FG
+            );
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Permesso Posizione 'Consenti Sempre'")
+                    .setMessage("Per rilevare automaticamente l'uscita da casa (> 3 km) e aprire il cancello al rientro mentre guidi con Android Auto a schermo spento, Android richiede l'opzione:\n\n"
+                            + "👉 \"Consenti sempre\" (Allow all the time)\n\n"
+                            + "Nota: il GPS attivo viene acceso solo durante la connessione ad Android Auto.")
+                    .setPositiveButton("Apri Impostazioni Posizione", (d, w) -> {
+                        ActivityCompat.requestPermissions(
+                                MainActivity.this,
+                                new String[]{Manifest.permission.ACCESS_BACKGROUND_LOCATION},
+                                PERMISSION_REQUEST_AUTO_OPEN_BG
+                        );
+                    })
+                    .setNegativeButton("Più tardi", null)
+                    .show();
+            return;
+        }
+
+        GeofenceHelper.syncGeofences(this);
+        notifyProximityServiceConfigChanged();
+        promptBatteryOptimizationHintIfNeeded();
+    }
+
+    private void promptBatteryOptimizationHintIfNeeded() {
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Consiglio Risparmio Batteria")
+                    .setMessage("Tutti i permessi GPS e notifiche sono attivi!\n\n"
+                            + "Per evitare che Android sospenda il rilevamento durante viaggi lunghi con Android Auto Wireless, è consigliato impostare 'Utilizzo batteria dell'app' su 'Senza restrizioni'.")
+                    .setPositiveButton("Apri Info App", (d, w) -> {
+                        try {
+                            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                            intent.setData(Uri.fromParts("package", getPackageName(), null));
+                            startActivity(intent);
+                        } catch (Exception ignored) {
+                        }
+                    })
+                    .setNegativeButton("OK, già fatto", null)
+                    .show();
+        } else {
+            Toast.makeText(this, "Tutti i permessi per l'auto-apertura con Android Auto sono attivi!", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ==========================================
+    // BACKUP & RIPRISTINO GLOBALE (MEMORIA ESTERNA)
+    // ==========================================
+
+    private void showGlobalBackupMenuDialog() {
+        List<Device> current = DeviceManager.getDevices(this);
+        final CharSequence[] items = new CharSequence[]{
+                "📤 Esporta Configurazione Globale (" + current.size() + " disp.)\nSalva seed BLE, dispositivi Shelly e impostazioni su memoria esterna",
+                "📥 Importa Configurazione Globale\nRipristina seed e dispositivi da un file di backup"
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle("Backup Globale Seed & Dispositivi")
+                .setItems(items, (dialog, which) -> {
+                    if (which == 0) {
+                        showExportGlobalBackupDialog();
+                    } else {
+                        startImportGlobalBackupFlow();
+                    }
+                })
+                .setNegativeButton("Chiudi", null)
+                .show();
+    }
+
+    private void showExportGlobalBackupDialog() {
+        List<Device> devices = DeviceManager.getDevices(this);
+        boolean hasHome = ProximityConfigManager.hasHomeLocation(this);
+        if (devices.isEmpty() && !hasHome) {
+            showResultAlertDialog(
+                    "Nessun Dato da Esportare",
+                    "Non ci sono dispositivi associati né configurazioni di rientro salvate da esportare."
+            );
+            return;
+        }
+
+        int bleCount = 0;
+        int shellyCount = 0;
+        for (Device d : devices) {
+            if (d.isShellyCloud()) {
+                shellyCount++;
+            } else {
+                bleCount++;
+            }
+        }
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Esporta Backup Globale");
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(18);
+        container.setPadding(pad, dpToPx(14), pad, pad);
+
+        TextView tvSummary = new TextView(this);
+        StringBuilder summarySb = new StringBuilder("Verrà generato un file di backup contenente:\n");
+        summarySb.append("• Ricevitori BLE (Seed 128-bit, ID e Contatori): ").append(bleCount).append("\n");
+        summarySb.append("• Dispositivi Shelly Cloud (Credenziali e Raggio): ").append(shellyCount);
+        if (hasHome) {
+            summarySb.append("\n• Coordinate Casa & Filtro Bluetooth Auto");
+        }
+        tvSummary.setText(summarySb.toString());
+        tvSummary.setTextSize(13.5f);
+        tvSummary.setTextColor(Color.parseColor("#212121"));
+        tvSummary.setPadding(0, 0, 0, dpToPx(12));
+        container.addView(tvSummary);
+
+        container.addView(createFieldLabel("Password di Cifratura AES-256 (Consigliata, opzionale):"));
+        LinearLayout pwdRow = new LinearLayout(this);
+        pwdRow.setOrientation(LinearLayout.HORIZONTAL);
+        pwdRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        EditText etPassword = new EditText(this);
+        etPassword.setHint("Lascia vuoto per JSON non cifrato");
+        etPassword.setSingleLine(true);
+        etPassword.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        etPassword.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        pwdRow.addView(etPassword, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button btnTogglePwd = new Button(this);
+        btnTogglePwd.setText("Mostra");
+        btnTogglePwd.setAllCaps(false);
+        btnTogglePwd.setTextSize(11.5f);
+        final boolean[] pwdVisible = new boolean[]{false};
+        btnTogglePwd.setOnClickListener(v -> {
+            pwdVisible[0] = !pwdVisible[0];
+            etPassword.setTransformationMethod(pwdVisible[0] ? null : PasswordTransformationMethod.getInstance());
+            etPassword.setSelection(etPassword.getText().length());
+            btnTogglePwd.setText(pwdVisible[0] ? "Nascondi" : "Mostra");
+        });
+        pwdRow.addView(btnTogglePwd);
+        container.addView(pwdRow);
+
+        TextView tvPwdHint = new TextView(this);
+        tvPwdHint.setText("Se inserisci una password, tutti i seed Rolling-Code e le chiavi Cloud saranno cifrati con AES-256-GCM (PBKDF2). Ricorda la password per poter re-importare il file.");
+        tvPwdHint.setTextSize(11.5f);
+        tvPwdHint.setTextColor(Color.parseColor("#616161"));
+        tvPwdHint.setPadding(0, dpToPx(4), 0, 0);
+        container.addView(tvPwdHint);
+
+        builder.setView(container);
+        builder.setPositiveButton("Scegli Cartella ed Esporta...", (d, w) -> {
+            String pwd = etPassword.getText().toString();
+            try {
+                pendingExportBackupBytes = BackupManager.createGlobalBackupBytes(this, pwd);
+                exportBackupLauncher.launch(BackupManager.buildSuggestedFileName());
+            } catch (Exception e) {
+                Log.e(TAG, "Errore generazione backup globale", e);
+                pendingExportBackupBytes = null;
+                showResultAlertDialog("Errore Creazione Backup", "Impossibile generare il backup: " + e.getMessage());
+            }
+        });
+        builder.setNegativeButton("Annulla", null);
+        builder.show();
+    }
+
+    private void writePendingBackupToUri(Uri uri) {
+        byte[] bytesToWrite = pendingExportBackupBytes;
+        pendingExportBackupBytes = null;
+        if (bytesToWrite == null || bytesToWrite.length == 0) {
+            return;
+        }
+
+        OutputStream os = null;
+        try {
+            try {
+                os = getContentResolver().openOutputStream(uri, "wt");
+            } catch (Exception fallbackErr) {
+                os = getContentResolver().openOutputStream(uri);
+            }
+            if (os == null) {
+                showResultAlertDialog("Errore Scrittura File", "Impossibile aprire in scrittura la posizione selezionata.");
+                return;
+            }
+            os.write(bytesToWrite);
+            os.flush();
+
+            String savedName = queryDisplayName(uri);
+            showResultAlertDialog(
+                    "Backup Esportato con Successo",
+                    "La configurazione globale di tutti i dispositivi associati è stata salvata su memoria esterna:\n\n"
+                            + "📄 " + savedName
+            );
+        } catch (Exception e) {
+            Log.e(TAG, "Errore scrittura file backup", e);
+            showResultAlertDialog("Errore Salvataggio Backup", "Errore durante il salvataggio del file: " + e.getMessage());
+        } finally {
+            if (os != null) {
+                try {
+                    os.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private void startImportGlobalBackupFlow() {
+        importBackupLauncher.launch(new String[]{"application/json", "application/octet-stream", "*/*"});
+    }
+
+    private void handleSelectedBackupImportUri(Uri uri) {
+        String fileName = queryDisplayName(uri);
+        String rawJson;
+
+        try (InputStream is = getContentResolver().openInputStream(uri)) {
+            if (is == null) {
+                showResultAlertDialog("Errore Lettura File", "Impossibile leggere il file selezionato.");
+                return;
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int read;
+            int total = 0;
+            while ((read = is.read(buf)) != -1) {
+                total += read;
+                if (total > BackupManager.MAX_BACKUP_FILE_BYTES) {
+                    showResultAlertDialog(
+                            "File Non Valido",
+                            "Il file selezionato supera la dimensione massima consentita per un backup ApritiSedano."
+                    );
+                    return;
+                }
+                bos.write(buf, 0, read);
+            }
+            rawJson = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            Log.e(TAG, "Errore lettura file backup", e);
+            showResultAlertDialog("Errore Lettura File", "Impossibile leggere il file: " + e.getMessage());
+            return;
+        }
+
+        try {
+            boolean encrypted = BackupManager.isBackupEncrypted(rawJson);
+            if (encrypted) {
+                showDecryptBackupPasswordDialog(fileName, rawJson);
+            } else {
+                BackupManager.ParsedBackup parsed = BackupManager.parseGlobalBackup(rawJson, null);
+                showConfirmImportBackupDialog(fileName, parsed);
+            }
+        } catch (BackupManager.InvalidBackupFormatException e) {
+            showResultAlertDialog("File di Backup Non Valido", e.getMessage());
+        } catch (BackupManager.WrongPasswordException e) {
+            showDecryptBackupPasswordDialog(fileName, rawJson);
+        }
+    }
+
+    private void showDecryptBackupPasswordDialog(String fileName, String rawJson) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Backup Protetto da Password");
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(18);
+        container.setPadding(pad, dpToPx(14), pad, pad);
+
+        TextView tvInfo = new TextView(this);
+        tvInfo.setText("Il file '" + fileName + "' è cifrato con AES-256-GCM.\nInserisci la password utilizzata al momento dell'esportazione:");
+        tvInfo.setTextSize(13.5f);
+        tvInfo.setPadding(0, 0, 0, dpToPx(10));
+        container.addView(tvInfo);
+
+        LinearLayout pwdRow = new LinearLayout(this);
+        pwdRow.setOrientation(LinearLayout.HORIZONTAL);
+        pwdRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        EditText etPassword = new EditText(this);
+        etPassword.setHint("Password del backup");
+        etPassword.setSingleLine(true);
+        etPassword.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        etPassword.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        pwdRow.addView(etPassword, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button btnTogglePwd = new Button(this);
+        btnTogglePwd.setText("Mostra");
+        btnTogglePwd.setAllCaps(false);
+        btnTogglePwd.setTextSize(11.5f);
+        final boolean[] pwdVisible = new boolean[]{false};
+        btnTogglePwd.setOnClickListener(v -> {
+            pwdVisible[0] = !pwdVisible[0];
+            etPassword.setTransformationMethod(pwdVisible[0] ? null : PasswordTransformationMethod.getInstance());
+            etPassword.setSelection(etPassword.getText().length());
+            btnTogglePwd.setText(pwdVisible[0] ? "Nascondi" : "Mostra");
+        });
+        pwdRow.addView(btnTogglePwd);
+        container.addView(pwdRow);
+
+        TextView tvError = new TextView(this);
+        tvError.setTextSize(12.5f);
+        tvError.setTextColor(Color.parseColor("#C62828"));
+        tvError.setPadding(0, dpToPx(6), 0, 0);
+        tvError.setVisibility(View.GONE);
+        container.addView(tvError);
+
+        builder.setView(container);
+        builder.setPositiveButton("Decifra", null);
+        builder.setNegativeButton("Annulla", null);
+
+        AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String pwd = etPassword.getText().toString();
+                if (pwd.isEmpty()) {
+                    tvError.setVisibility(View.VISIBLE);
+                    tvError.setText("Inserisci la password del backup.");
+                    return;
+                }
+                try {
+                    BackupManager.ParsedBackup parsed = BackupManager.parseGlobalBackup(rawJson, pwd);
+                    dialog.dismiss();
+                    showConfirmImportBackupDialog(fileName, parsed);
+                } catch (BackupManager.WrongPasswordException wrongPwd) {
+                    tvError.setVisibility(View.VISIBLE);
+                    tvError.setText("🔴 Password errata. Verifica e riprova.");
+                } catch (BackupManager.InvalidBackupFormatException badFmt) {
+                    dialog.dismiss();
+                    showResultAlertDialog("Errore Formato Backup", badFmt.getMessage());
+                }
+            });
+        });
+        dialog.show();
+    }
+
+    private void showConfirmImportBackupDialog(String fileName, BackupManager.ParsedBackup parsed) {
+        List<Device> currentLocal = DeviceManager.getDevices(this);
+        boolean hasExistingLocal = !currentLocal.isEmpty();
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Conferma Importazione Backup");
+
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(18);
+        container.setPadding(pad, dpToPx(14), pad, pad);
+        scrollView.addView(container);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("File: ").append(fileName).append("\n");
+        if (!parsed.exportedAt.isEmpty()) {
+            sb.append("Data export: ").append(parsed.exportedAt).append("\n");
+        }
+        sb.append("\nDispositivi trovati (").append(parsed.devices.size()).append("):\n");
+
+        for (Device d : parsed.devices) {
+            if (d.isShellyCloud()) {
+                sb.append("• ☁️ ").append(d.getName())
+                        .append(" [Shelly ID: ").append(d.getShellyDeviceId())
+                        .append(d.isAutoOpenEnabled() ? ", Auto " + d.getAutoOpenRadiusMeters() + "m" : "")
+                        .append("]\n");
+            } else {
+                sb.append(String.format(
+                        Locale.US,
+                        "• 📡 %s [BLE %s • ID 0x%04X • Cnt %d%s]\n",
+                        d.getName(),
+                        d.getMacAddress(),
+                        d.getClientId(),
+                        d.getCounter(),
+                        d.isMaster() ? " • MASTER" : ""
+                ));
+            }
+        }
+
+        if (parsed.proximity != null && parsed.proximity.hasHomeLocation) {
+            sb.append("\n📍 Include posizione GPS Casa");
+            if (!parsed.proximity.carBluetoothName.isEmpty() || !parsed.proximity.carBluetoothMac.isEmpty()) {
+                sb.append(" e filtro Bluetooth Auto (")
+                        .append(!parsed.proximity.carBluetoothName.isEmpty()
+                                ? parsed.proximity.carBluetoothName
+                                : parsed.proximity.carBluetoothMac)
+                        .append(")");
+            }
+            sb.append(".");
+        }
+
+        if (hasExistingLocal) {
+            sb.append("\n\nScegli come importare rispetto ai ")
+                    .append(currentLocal.size())
+                    .append(" dispositivi già presenti:\n")
+                    .append("• Unisci / Aggiorna: aggiunge i nuovi e aggiorna quelli esistenti mantenendo il contatore più recente.\n")
+                    .append("• Sovrascrivi Tutto: sostituisce l'intera lista con quella del backup.");
+        }
+
+        TextView tvPreview = new TextView(this);
+        tvPreview.setText(sb.toString());
+        tvPreview.setTextSize(13f);
+        tvPreview.setTextColor(Color.parseColor("#212121"));
+        container.addView(tvPreview);
+
+        final CheckBox cbAdvanceCounter = new CheckBox(this);
+        if (parsed.getBleCount() > 0) {
+            cbAdvanceCounter.setText("Avanza contatori Rolling-Code di +10 (usa se hai aperto i varchi BLE dopo questo backup)");
+            cbAdvanceCounter.setTextSize(12.5f);
+            cbAdvanceCounter.setPadding(0, dpToPx(8), 0, 0);
+            cbAdvanceCounter.setChecked(false);
+            container.addView(cbAdvanceCounter);
+        }
+
+        builder.setView(scrollView);
+
+        if (hasExistingLocal) {
+            builder.setPositiveButton("Unisci / Aggiorna", (d, w) -> {
+                int offset = cbAdvanceCounter.isChecked() ? 10 : 0;
+                completeBackupImport(parsed, false, offset);
+            });
+            builder.setNeutralButton("Sovrascrivi Tutto", (d, w) -> {
+                int offset = cbAdvanceCounter.isChecked() ? 10 : 0;
+                completeBackupImport(parsed, true, offset);
+            });
+        } else {
+            builder.setPositiveButton("Importa Tutto", (d, w) -> {
+                int offset = cbAdvanceCounter.isChecked() ? 10 : 0;
+                completeBackupImport(parsed, true, offset);
+            });
+        }
+        builder.setNegativeButton("Annulla", null);
+        builder.show();
+    }
+
+    private void completeBackupImport(BackupManager.ParsedBackup parsed, boolean overwriteAll, int bleCounterOffset) {
+        BackupManager.applyImportedBackup(this, parsed, overwriteAll, bleCounterOffset);
+        deviceList = DeviceManager.getDevices(this);
+        deviceAdapter.updateDevices(deviceList);
+        startStateScanning();
+        GeofenceHelper.syncGeofences(this);
+        notifyProximityServiceConfigChanged();
+
+        Toast.makeText(
+                this,
+                "Backup importato con successo! (" + deviceList.size() + " dispositivi attivi)",
+                Toast.LENGTH_LONG
+        ).show();
+
+        if (ProximityConfigManager.hasAnyAutoOpenDevice(this)) {
+            ensureAutoOpenPermissionsGuided();
+        }
     }
 }

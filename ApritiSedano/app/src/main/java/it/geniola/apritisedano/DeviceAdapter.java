@@ -1,5 +1,6 @@
 package it.geniola.apritisedano;
 
+import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.view.LayoutInflater;
@@ -10,6 +11,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.core.widget.ImageViewCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.List;
@@ -105,6 +107,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
     public void tickPairingCountdowns() {
         for (int i = 0; i < deviceList.size(); i++) {
             Device d = deviceList.get(i);
+            if (d.isShellyCloud()) continue;
             boolean changed = false;
             if (d.getCurrentState() == 5) {
                 if (d.getRemainingPairingSeconds() <= 0) {
@@ -135,6 +138,18 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
         }
     }
 
+    public void updateShellyFeedback(String macAddress, int shellyState, String message) {
+        if (macAddress == null || deviceList == null) return;
+        for (int i = 0; i < deviceList.size(); i++) {
+            Device d = deviceList.get(i);
+            if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
+                d.setShellyUiFeedback(shellyState, message);
+                notifyItemChanged(i);
+                return;
+            }
+        }
+    }
+
     @NonNull
     @Override
     public DeviceViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
@@ -145,8 +160,136 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
     @Override
     public void onBindViewHolder(@NonNull DeviceViewHolder holder, int position) {
         Device device = deviceList.get(position);
+        Context ctx = holder.itemView.getContext();
         holder.tvDeviceName.setText(device.getName());
+
+        if (device.isShellyCloud()) {
+            bindShellyDevice(holder, device, ctx);
+        } else {
+            bindBleMcuDevice(holder, device);
+        }
+
+        holder.btnAction.setOnClickListener(v -> {
+            if (listener != null) {
+                listener.onDeviceActionClick(device);
+            }
+        });
+
+        holder.ivSettings.setOnClickListener(v -> {
+            if (settingsListener != null) {
+                settingsListener.onSettingsClick(device);
+            }
+        });
+    }
+
+    private void bindShellyDevice(@NonNull DeviceViewHolder holder, @NonNull Device device, @NonNull Context ctx) {
+        if (holder.ivDeviceIcon != null) {
+            int pad = (int) (7 * ctx.getResources().getDisplayMetrics().density);
+            holder.ivDeviceIcon.setBackgroundResource(R.drawable.badge_shelly_cloud);
+            holder.ivDeviceIcon.setPadding(pad, pad, pad, pad);
+            holder.ivDeviceIcon.setImageResource(R.drawable.ic_gate);
+            ImageViewCompat.setImageTintList(holder.ivDeviceIcon, ColorStateList.valueOf(Color.parseColor("#2E7D32")));
+        }
+
+        holder.tvDeviceMac.setText(String.format(
+                Locale.US,
+                "Shelly ID: %s (CH %d)",
+                device.getShellyDeviceId(),
+                device.getShellyChannel()
+        ));
+
+        boolean isArmed = ProximityConfigManager.isArmed(ctx);
+        holder.tvAntennaBadge.setVisibility(View.VISIBLE);
+        if (device.isAutoOpenEnabled()) {
+            if (device.isAutoOpenDryRun()) {
+                holder.tvAntennaBadge.setText("🧪 Test " + device.getAutoOpenRadiusMeters() + "m");
+                holder.tvAntennaBadge.setBackgroundResource(R.drawable.badge_antenna_external);
+                holder.tvAntennaBadge.setTextColor(Color.parseColor("#E65100"));
+            } else if (isArmed) {
+                holder.tvAntennaBadge.setText("🚗 Auto " + device.getAutoOpenRadiusMeters() + "m • ARMATO");
+                holder.tvAntennaBadge.setBackgroundResource(R.drawable.badge_shelly_cloud);
+                holder.tvAntennaBadge.setTextColor(Color.parseColor("#2E7D32"));
+            } else {
+                holder.tvAntennaBadge.setText("🚗 Auto " + device.getAutoOpenRadiusMeters() + "m");
+                holder.tvAntennaBadge.setBackgroundResource(R.drawable.badge_antenna_internal);
+                holder.tvAntennaBadge.setTextColor(Color.parseColor("#1565C0"));
+            }
+        } else {
+            holder.tvAntennaBadge.setText("☁️ Shelly Cloud");
+            holder.tvAntennaBadge.setBackgroundResource(R.drawable.badge_antenna_internal);
+            holder.tvAntennaBadge.setTextColor(Color.parseColor("#1565C0"));
+        }
+
+        if (holder.defaultBtnTint != null) {
+            holder.btnAction.setBackgroundTintList(holder.defaultBtnTint);
+        }
+        if (holder.defaultBtnTextColors != null) {
+            holder.btnAction.setTextColor(holder.defaultBtnTextColors);
+        }
+
+        int uiState = device.getShellyUiState();
+        if (uiState == 1) {
+            holder.tvDeviceState.setText("⏳ Invio comando Shelly Cloud...");
+            holder.tvDeviceState.setTextColor(Color.parseColor("#1565C0"));
+            holder.btnAction.setEnabled(false);
+            holder.btnAction.setText("INVIO...");
+        } else if (uiState == 2) {
+            String msg = device.getShellyUiMessage();
+            holder.tvDeviceState.setText(msg.isEmpty() ? "✅ Apertura inviata!" : "✅ " + msg);
+            holder.tvDeviceState.setTextColor(Color.parseColor("#2E7D32"));
+            holder.btnAction.setEnabled(true);
+            holder.btnAction.setText("APRI");
+        } else if (uiState == 3) {
+            String msg = device.getShellyUiMessage();
+            holder.tvDeviceState.setText(msg.isEmpty() ? "❌ Errore Cloud" : "❌ " + msg);
+            holder.tvDeviceState.setTextColor(Color.parseColor("#C62828"));
+            holder.btnAction.setEnabled(true);
+            holder.btnAction.setText("RIPROVA");
+        } else {
+            if (device.isAutoOpenEnabled()) {
+                if (isArmed) {
+                    holder.tvDeviceState.setText("Pronto • Rientro ARMATO");
+                    holder.tvDeviceState.setTextColor(Color.parseColor("#2E7D32"));
+                } else {
+                    holder.tvDeviceState.setText("Pronto • In casa / Disarmato");
+                    holder.tvDeviceState.setTextColor(Color.parseColor("#616161"));
+                }
+            } else {
+                holder.tvDeviceState.setText("Pronto (Impulso Shelly Cloud)");
+                holder.tvDeviceState.setTextColor(Color.parseColor("#616161"));
+            }
+            holder.btnAction.setEnabled(true);
+            holder.btnAction.setText("APRI");
+        }
+
+        if (device.isAutoOpenEnabled()
+                && ProximityConfigManager.isServiceRunning()
+                && ProximityConfigManager.isAndroidAutoConnected()) {
+            float dist = ProximityConfigManager.getLastDistanceMeters();
+            String distStr = "";
+            if (dist >= 1000f) {
+                distStr = String.format(Locale.US, "%.2f km • ", dist / 1000f);
+            } else if (dist >= 0f) {
+                distStr = String.format(Locale.US, "%.0f m • ", dist);
+            }
+            holder.tvActionTimer.setVisibility(View.VISIBLE);
+            holder.tvActionTimer.setTextColor(Color.parseColor("#1565C0"));
+            holder.tvActionTimer.setText("📡 AA: " + distStr + ProximityConfigManager.getCurrentGearLabel());
+        } else {
+            holder.tvActionTimer.setVisibility(View.GONE);
+        }
+    }
+
+    private void bindBleMcuDevice(@NonNull DeviceViewHolder holder, @NonNull Device device) {
+        if (holder.ivDeviceIcon != null) {
+            holder.ivDeviceIcon.setBackground(null);
+            holder.ivDeviceIcon.setPadding(0, 0, 0, 0);
+            ImageViewCompat.setImageTintList(holder.ivDeviceIcon, null);
+            holder.ivDeviceIcon.setImageResource(R.drawable.ic_sedano_main);
+        }
+
         holder.tvDeviceMac.setText(device.getMacAddress());
+        holder.tvActionTimer.setTextColor(Color.parseColor("#D32F2F"));
 
         if (device.getAntennaState() == 0) {
             holder.tvAntennaBadge.setVisibility(View.VISIBLE);
@@ -202,18 +345,6 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
                 holder.btnAction.setText("APRI");
             }
         }
-
-        holder.btnAction.setOnClickListener(v -> {
-            if (listener != null) {
-                listener.onDeviceActionClick(device);
-            }
-        });
-
-        holder.ivSettings.setOnClickListener(v -> {
-            if (settingsListener != null) {
-                settingsListener.onSettingsClick(device);
-            }
-        });
     }
 
     @Override
@@ -222,6 +353,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
     }
 
     static class DeviceViewHolder extends RecyclerView.ViewHolder {
+        ImageView ivDeviceIcon;
         TextView tvDeviceName;
         TextView tvDeviceMac;
         TextView tvAntennaBadge;
@@ -234,6 +366,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
 
         public DeviceViewHolder(@NonNull View itemView) {
             super(itemView);
+            ivDeviceIcon = itemView.findViewById(R.id.iv_device_icon);
             tvDeviceName = itemView.findViewById(R.id.tv_device_name);
             tvDeviceMac = itemView.findViewById(R.id.tv_device_mac);
             tvAntennaBadge = itemView.findViewById(R.id.tv_antenna_badge);

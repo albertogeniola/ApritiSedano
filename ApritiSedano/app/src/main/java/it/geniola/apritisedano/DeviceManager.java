@@ -74,9 +74,31 @@ public class DeviceManager {
     }
 
     public static synchronized void addDevice(Context context, Device device) {
+        upsertDevice(context, device.getMacAddress(), device);
+    }
+
+    public static synchronized void upsertDevice(Context context, String previousMacAddress, Device updatedDevice) {
         List<Device> devices = getDevices(context);
-        devices.removeIf(d -> d.getMacAddress().equalsIgnoreCase(device.getMacAddress()));
-        devices.add(device);
+        int replaceIndex = -1;
+        if (previousMacAddress != null && !previousMacAddress.isEmpty()) {
+            for (int i = 0; i < devices.size(); i++) {
+                if (devices.get(i).getMacAddress().equalsIgnoreCase(previousMacAddress)) {
+                    replaceIndex = i;
+                    break;
+                }
+            }
+        }
+        if (replaceIndex >= 0) {
+            devices.set(replaceIndex, updatedDevice);
+            for (int i = devices.size() - 1; i >= 0; i--) {
+                if (i != replaceIndex && devices.get(i).getMacAddress().equalsIgnoreCase(updatedDevice.getMacAddress())) {
+                    devices.remove(i);
+                }
+            }
+        } else {
+            devices.removeIf(d -> d.getMacAddress().equalsIgnoreCase(updatedDevice.getMacAddress()));
+            devices.add(updatedDevice);
+        }
         saveDevices(context, devices);
     }
 

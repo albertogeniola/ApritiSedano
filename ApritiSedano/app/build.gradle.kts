@@ -58,6 +58,7 @@ dependencies {
     implementation(libs.appcompat)
     implementation(libs.material)
     implementation("androidx.car.app:app:1.4.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation(libs.security.crypto)
     testImplementation(libs.junit)
     androidTestImplementation(libs.espresso.core)

@@ -28,7 +28,18 @@ public class ApritiSedanoTileService extends TileService {
             Log.w(TAG, "Nessun dispositivo configurato per il Quick Settings Tile.");
             return;
         }
-        Device target = devices.get(0);
+
+        // Preferisce il primo dispositivo BLE MCU per il tile "Apri Box"
+        Device target = null;
+        for (Device d : devices) {
+            if (d.isBleMcu()) {
+                target = d;
+                break;
+            }
+        }
+        if (target == null) {
+            target = devices.get(0);
+        }
 
         // Mostriamo visivamente che il tile sta lavorando
         Tile tile = getQsTile();
@@ -37,13 +48,17 @@ public class ApritiSedanoTileService extends TileService {
             tile.updateTile();
         }
 
-        Intent serviceIntent = new Intent(this, ApritiSedanoService.class);
-        serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, target.getMacAddress());
-        serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, target.getSecretKey());
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
+        if (target.isShellyCloud()) {
+            ShellyCloudClient.triggerDeviceAsync(target, 1, null);
         } else {
-            startService(serviceIntent);
+            Intent serviceIntent = new Intent(this, ApritiSedanoService.class);
+            serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, target.getMacAddress());
+            serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, target.getSecretKey());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent);
+            } else {
+                startService(serviceIntent);
+            }
         }
 
         // Il tile tornerà inattivo automaticamente dopo 2 secondi

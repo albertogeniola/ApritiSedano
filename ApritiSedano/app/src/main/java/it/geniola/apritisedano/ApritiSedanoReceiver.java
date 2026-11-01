@@ -25,7 +25,24 @@ public class ApritiSedanoReceiver extends BroadcastReceiver {
                 Log.w(TAG, "Nessun dispositivo configurato per l'apertura rapida.");
                 return;
             }
-            Device target = devices.get(0);
+
+            // Preferisce il primo dispositivo BLE MCU (Box/Garage) per il comando vocale "Sblocca Garage"
+            Device target = null;
+            for (Device d : devices) {
+                if (d.isBleMcu()) {
+                    target = d;
+                    break;
+                }
+            }
+            if (target == null) {
+                target = devices.get(0);
+            }
+
+            if (target.isShellyCloud()) {
+                ShellyCloudClient.triggerDeviceAsync(target, 1, null);
+                return;
+            }
+
             Intent serviceIntent = new Intent(context, ApritiSedanoService.class);
             serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, target.getMacAddress());
             serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, target.getSecretKey());
