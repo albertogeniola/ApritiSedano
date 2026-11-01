@@ -17,9 +17,14 @@ void AntennaManager::init() {
     // Carica (o forza) la configurazione antenna
     Preferences prefs;
     prefs.begin("apritisedano", false);
-    #if defined(HW_FORCE_INTERNAL_ANTENNA) && HW_FORCE_INTERNAL_ANTENNA
+    #if defined(HW_FORCE_EXTERNAL_ANTENNA) && HW_FORCE_EXTERNAL_ANTENNA
+    _isExternal = true;
+    prefs.putBool("ext_ant", true);
+    #elif defined(HW_FORCE_INTERNAL_ANTENNA) && HW_FORCE_INTERNAL_ANTENNA
     _isExternal = false;
     prefs.putBool("ext_ant", false);
+    #elif defined(HW_DEFAULT_EXTERNAL_ANTENNA) && HW_DEFAULT_EXTERNAL_ANTENNA
+    _isExternal = prefs.getBool("ext_ant", true);
     #else
     _isExternal = prefs.getBool("ext_ant", false);
     #endif
