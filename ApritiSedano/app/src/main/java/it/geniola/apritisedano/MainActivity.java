@@ -157,7 +157,6 @@ public class MainActivity extends AppCompatActivity {
                 }
             } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action) || UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
                 updateUsbUiState();
-        setupAppVersionFooter();
             }
         }
     };
@@ -495,6 +494,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         updateUsbUiState();
+        setupAppVersionFooter();
 
         checkAndRequestPermissions();
 
