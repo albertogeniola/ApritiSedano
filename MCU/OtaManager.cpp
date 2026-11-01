@@ -335,12 +335,15 @@ void OtaManager::loop() {
 
     // 4. Watchdog timeout (60s in attesa di connessione GATT, 30s di inattività durante trasferimento)
     if (!_clientConnected) {
-        if (now - _sessionStartMs >= OTA_CONNECT_TIMEOUT_MS) {
+        unsigned long curMs = millis();
+        if (curMs >= _sessionStartMs && (curMs - _sessionStartMs >= OTA_CONNECT_TIMEOUT_MS)) {
             abortOtaSession("OTA_TIMEOUT_CONN");
             return;
         }
     } else {
-        if (now - _lastActivityMs >= OTA_ACTIVITY_TIMEOUT_MS) {
+        unsigned long lastAct = _lastActivityMs;
+        unsigned long curMs = millis();
+        if (curMs >= lastAct && (curMs - lastAct >= OTA_ACTIVITY_TIMEOUT_MS)) {
             notifyControl("ERR:TIMEOUT");
             delay(50);
             abortOtaSession("OTA_TIMEOUT_DATA");

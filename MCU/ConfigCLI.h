@@ -11,6 +11,7 @@ private:
     static void showMenu();
     static void configureMasterClient();
     static void managePairedClients();
+    static void runGpioDiagnostics();
     static String readString();
 };
 

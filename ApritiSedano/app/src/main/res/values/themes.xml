@@ -5,18 +5,32 @@
         <item name="colorPrimary">@color/sedano_primary</item>
         <item name="colorPrimaryVariant">@color/sedano_primary_dark</item>
         <item name="colorOnPrimary">@color/white</item>
-        
+
         <!-- Secondary brand color. -->
         <item name="colorSecondary">@color/sedano_accent</item>
         <item name="colorSecondaryVariant">@color/sedano_accent</item>
         <item name="colorOnSecondary">@color/black</item>
-        
+
         <!-- Backgrounds -->
         <item name="android:windowBackground">@color/bg_light</item>
         <item name="colorSurface">@color/surface_light</item>
-        
+
         <!-- Status bar color. -->
         <item name="android:statusBarColor">?attr/colorPrimary</item>
         <item name="android:windowLightStatusBar">false</item>
+
+        <!-- Modern rounded BottomSheet style -->
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.ApritiSedano.BottomSheetDialog</item>
+    </style>
+
+    <style name="ThemeOverlay.ApritiSedano.BottomSheetDialog" parent="ThemeOverlay.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.ApritiSedano.BottomSheet.Modal</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+    </style>
+
+    <style name="Widget.ApritiSedano.BottomSheet.Modal" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="android:background">@android:color/transparent</item>
+        <item name="backgroundTint">@android:color/transparent</item>
     </style>
 </resources>

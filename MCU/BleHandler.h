@@ -55,7 +55,16 @@ private:
     static unsigned long _lastPairingBeepTime;
 
     static bool _buttonIsDown;
+    static bool _buttonReleasePending;
+    static uint8_t _buttonPinMask;
+    static uint8_t _buttonLastProgressSec;
+    static uint16_t _buttonDropoutCount;
     static unsigned long _buttonPressStartTime;
+    static unsigned long _buttonLastLowTime;
+    static unsigned long _buttonLastSampleMs;
+    static unsigned long _buttonAccumulatedLowMs;
+    static unsigned long _buttonReleaseStartTime;
+    static unsigned long _buttonRecoveryStartMs;
     static bool _button3sTriggered;
     static bool _button10sTriggered;
 

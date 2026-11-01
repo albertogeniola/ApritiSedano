@@ -14,6 +14,7 @@
 
 #include "Logger.h"
 #include "AntennaManager.h"
+#include "HardwareConfig.h"
 
 void ConfigCLI::init() {
     RollingCodeManager::init();
@@ -49,6 +50,7 @@ void ConfigCLI::showMenu() {
     Serial.println("8. Mostra informazioni di sistema, partizioni OTA e memoria (SysInfo)");
     Serial.println("9. Commuta Antenna (Interna / Esterna)");
     Serial.println("10. Gestisci Smartphone Associati (Lista / Rimuovi / Reset)");
+    Serial.println("11. Diagnostica Live Pin Pulsanti e Sensore (Q per uscire)");
     Serial.print("Scelta: ");
 }
 
@@ -190,6 +192,84 @@ void ConfigCLI::managePairedClients() {
     }
 }
 
+void ConfigCLI::runGpioDiagnostics() {
+    Serial.println("\n=======================================================");
+    Serial.println(" DIAGNOSTICA LIVE PIN PULSANTI E SENSORE (1 kHz)");
+    Serial.println("=======================================================");
+    Serial.printf(" - BOOT Button : GPIO %d (premuto = LOW)\n", (int)HW_BOOT_PIN);
+#ifdef HW_EXTERNAL_BTN_PIN
+    Serial.printf(" - EXT Button  : GPIO %d (premuto = LOW)\n", (int)HW_EXTERNAL_BTN_PIN);
+#endif
+    Serial.printf(" - Door Sensor : GPIO %d (chiuso  = %s)\n", (int)HW_SENSOR_PIN,
+                  (HW_SENSOR_CLOSED_STATE == LOW) ? "LOW" : "HIGH");
+    Serial.println("Premi i pulsanti per osservare le transizioni grezze.");
+    Serial.println("Invia 'Q' + Invio per tornare al menu.");
+    Serial.println("-------------------------------------------------------");
+
+    int lastBoot = digitalRead(HW_BOOT_PIN);
+#ifdef HW_EXTERNAL_BTN_PIN
+    int lastExt = digitalRead(HW_EXTERNAL_BTN_PIN);
+#endif
+    int lastSens = digitalRead(HW_SENSOR_PIN);
+    unsigned long lastBootEdgeMs = millis();
+#ifdef HW_EXTERNAL_BTN_PIN
+    unsigned long lastExtEdgeMs = millis();
+#endif
+    unsigned long lastSensEdgeMs = millis();
+
+    Serial.printf("[%8lu ms] STATO INIZIALE -> BOOT(GPIO %d)=%s",
+                  millis(), (int)HW_BOOT_PIN, (lastBoot == LOW) ? "LOW (PREMUTO)" : "HIGH");
+#ifdef HW_EXTERNAL_BTN_PIN
+    Serial.printf(" | EXT(GPIO %d)=%s",
+                  (int)HW_EXTERNAL_BTN_PIN, (lastExt == LOW) ? "LOW (PREMUTO)" : "HIGH");
+#endif
+    Serial.printf(" | SENSOR(GPIO %d)=%s\n",
+                  (int)HW_SENSOR_PIN, (lastSens == LOW) ? "LOW" : "HIGH");
+
+    while (true) {
+        unsigned long now = millis();
+
+        int curBoot = digitalRead(HW_BOOT_PIN);
+        if (curBoot != lastBoot) {
+            unsigned long dur = now - lastBootEdgeMs;
+            lastBoot = curBoot;
+            lastBootEdgeMs = now;
+            Serial.printf("[%8lu ms] BOOT (GPIO %d) -> %s (stato precedente mantenuto per %lu ms)\n",
+                          now, (int)HW_BOOT_PIN, (curBoot == LOW) ? "LOW  [PREMUTO]" : "HIGH [RILASCIATO]", dur);
+        }
+
+#ifdef HW_EXTERNAL_BTN_PIN
+        int curExt = digitalRead(HW_EXTERNAL_BTN_PIN);
+        if (curExt != lastExt) {
+            unsigned long dur = now - lastExtEdgeMs;
+            lastExt = curExt;
+            lastExtEdgeMs = now;
+            Serial.printf("[%8lu ms] EXT  (GPIO %d) -> %s (stato precedente mantenuto per %lu ms)\n",
+                          now, (int)HW_EXTERNAL_BTN_PIN, (curExt == LOW) ? "LOW  [PREMUTO]" : "HIGH [RILASCIATO]", dur);
+        }
+#endif
+
+        int curSens = digitalRead(HW_SENSOR_PIN);
+        if (curSens != lastSens) {
+            unsigned long dur = now - lastSensEdgeMs;
+            lastSens = curSens;
+            lastSensEdgeMs = now;
+            Serial.printf("[%8lu ms] SENS (GPIO %d) -> %s (stato precedente mantenuto per %lu ms)\n",
+                          now, (int)HW_SENSOR_PIN, (curSens == LOW) ? "LOW" : "HIGH", dur);
+        }
+
+        while (Serial.available()) {
+            char c = Serial.read();
+            if (c == 'q' || c == 'Q') {
+                while (Serial.available()) Serial.read();
+                Serial.println("Uscita dalla diagnostica GPIO.");
+                return;
+            }
+        }
+        delay(1);
+    }
+}
+
 void ConfigCLI::handle() {
     bool exitMenu = false;
     while (!exitMenu) {
@@ -245,6 +325,8 @@ void ConfigCLI::handle() {
             }
         } else if (choice == "10") {
             managePairedClients();
+        } else if (choice == "11") {
+            runGpioDiagnostics();
         } else {
             Serial.println("Invalid choice.");
         }

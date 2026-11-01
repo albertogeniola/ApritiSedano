@@ -26,7 +26,16 @@ unsigned long BleHandler::_pairingStartTime = 0;
 unsigned long BleHandler::_lastPairingBeepTime = 0;
 
 bool BleHandler::_buttonIsDown = false;
+bool BleHandler::_buttonReleasePending = false;
+uint8_t BleHandler::_buttonPinMask = 0;
+uint8_t BleHandler::_buttonLastProgressSec = 0;
+uint16_t BleHandler::_buttonDropoutCount = 0;
 unsigned long BleHandler::_buttonPressStartTime = 0;
+unsigned long BleHandler::_buttonLastLowTime = 0;
+unsigned long BleHandler::_buttonLastSampleMs = 0;
+unsigned long BleHandler::_buttonAccumulatedLowMs = 0;
+unsigned long BleHandler::_buttonReleaseStartTime = 0;
+unsigned long BleHandler::_buttonRecoveryStartMs = 0;
 bool BleHandler::_button3sTriggered = false;
 bool BleHandler::_button10sTriggered = false;
 
@@ -333,8 +342,9 @@ void BleHandler::init(int relayPin, int sensorPin) {
 void BleHandler::enterPairingMode() {
     if (OtaManager::isActive()) return;
     _isPairingMode = true;
-    _pairingStartTime = millis();
-    _lastPairingBeepTime = millis();
+    unsigned long startMs = millis();
+    _pairingStartTime = startMs;
+    _lastPairingBeepTime = startMs;
     LedIndicator::setState(LED_PAIRING);
     BuzzerManager::playPairingTickSequence();
     _needsUpdateStateBeacon = true;
@@ -452,6 +462,41 @@ void BleHandler::updateStateBeacon() {
     pAdvertising->setScanResponseData(oScanResponseData);
 }
 
+// Campionamento multiplo rapido (~80 us) con identificazione separata dei pin BOOT ed EXTERNAL.
+// Bit 0 (0x01) = HW_BOOT_PIN premuto (LOW), Bit 1 (0x02) = HW_EXTERNAL_BTN_PIN premuto (LOW).
+static uint8_t readPhysicalButtonMask() {
+    int bootLow = 0;
+    int extLow = 0;
+    for (int i = 0; i < 5; i++) {
+        if (digitalRead(HW_BOOT_PIN) == LOW) bootLow++;
+#ifdef HW_EXTERNAL_BTN_PIN
+        if (digitalRead(HW_EXTERNAL_BTN_PIN) == LOW) extLow++;
+#endif
+        if (i < 4) {
+            delayMicroseconds(20);
+        }
+    }
+    uint8_t mask = 0;
+    if (bootLow >= 3) mask |= 0x01;
+    if (extLow >= 3)  mask |= 0x02;
+    return mask;
+}
+
+static void formatButtonPinLabel(uint8_t mask, char* outBuf, size_t outSize) {
+#ifdef HW_EXTERNAL_BTN_PIN
+    if ((mask & 0x03) == 0x03) {
+        snprintf(outBuf, outSize, "BOOT GPIO %d + EXT GPIO %d", (int)HW_BOOT_PIN, (int)HW_EXTERNAL_BTN_PIN);
+    } else if (mask & 0x02) {
+        snprintf(outBuf, outSize, "EXT GPIO %d", (int)HW_EXTERNAL_BTN_PIN);
+    } else {
+        snprintf(outBuf, outSize, "BOOT GPIO %d", (int)HW_BOOT_PIN);
+    }
+#else
+    (void)mask;
+    snprintf(outBuf, outSize, "BOOT GPIO %d", (int)HW_BOOT_PIN);
+#endif
+}
+
 void BleHandler::loop() {
     if (_isPaused) return;
 
@@ -478,78 +523,176 @@ void BleHandler::loop() {
 
     unsigned long now = millis();
 
-    // Gestione Pulsante Fisico (disabilitata durante la modalità identificazione CLI)
+    // Gestione Pulsante Fisico (disabilitata durante la modalità identificazione CLI).
+    // Tollerante ai micro-distacchi meccanici fino a 950 ms tipici dei microswitch SMD/breadboard
+    // ossidati o con contatto intermittente durante la pressione prolungata (3s pairing / 10s antenna).
     if (!_identifyOnlyMode) {
-        bool isBtnPressed = false;
-#ifdef HW_EXTERNAL_BTN_PIN
-        if (digitalRead(HW_EXTERNAL_BTN_PIN) == LOW) isBtnPressed = true;
-#endif
-        if (!isBtnPressed && digitalRead(HW_BOOT_PIN) == LOW) isBtnPressed = true;
+        static const unsigned long BTN_PRESS_MIN_MS          = 50UL;
+        static const unsigned long BTN_RECOVERY_MIN_MS       = 20UL;
+        static const unsigned long BTN_RELEASE_DEBOUNCE_MS   = 950UL;
+        static const unsigned long BTN_SHORT_PRESS_MAX_MS    = 1200UL;
+        static const unsigned long BTN_HOLD_3S_WALL_MS       = 3000UL;
+        static const unsigned long BTN_HOLD_3S_MIN_LOW_MS    = 750UL;
+        static const unsigned long BTN_HOLD_10S_WALL_MS      = 10000UL;
+        static const unsigned long BTN_HOLD_10S_MIN_LOW_MS   = 2500UL;
+        static const unsigned long BTN_PAIR_CANCEL_GUARD_MS  = 2500UL;
 
-        if (isBtnPressed) {
-            if (!_buttonIsDown) {
+        uint8_t btnMask = readPhysicalButtonMask();
+
+        if (!_buttonIsDown) {
+            _buttonLastSampleMs = now;
+            if (btnMask != 0) {
                 _buttonIsDown = true;
+                _buttonPinMask = btnMask;
                 _buttonPressStartTime = now;
+                _buttonLastLowTime = now;
+                _buttonAccumulatedLowMs = 10UL;
+                _buttonReleasePending = false;
+                _buttonReleaseStartTime = 0;
+                _buttonRecoveryStartMs = 0;
+                _buttonDropoutCount = 0;
+                _buttonLastProgressSec = 0;
                 _button3sTriggered = false;
                 _button10sTriggered = false;
-            } else {
-                unsigned long heldMs = now - _buttonPressStartTime;
-                if (!_button3sTriggered && heldMs >= 3000UL) {
-                    _button3sTriggered = true;
-                    enterPairingMode();
-                    Logger::logOperation("PAIR_MODE_BTN");
-                }
-                if (!_button10sTriggered && heldMs >= 10000UL) {
-                    _button10sTriggered = true;
-                    // Se l'utente continua a tenere premuto fino a 10s, annulla il pairing mode e commuta l'antenna
-                    _isPairingMode = false;
-                    _needsUpdateStateBeacon = true;
-                    LedIndicator::setState(LED_IDLE);
-                    Serial.println("Pulsante tenuto premuto per 10 secondi: Toggle Antenna!");
-                    AntennaState result = AntennaManager::toggle();
-                    if (result == ANTENNA_INTERNAL) {
-                        BuzzerManager::playAntennaInternalSequence();
-                        Logger::logOperation("ANT_INTERNA");
-                    } else if (result == ANTENNA_EXTERNAL) {
-                        BuzzerManager::playAntennaExternalSequence();
-                        Logger::logOperation("ANT_ESTERNA");
-                    } else {
-                        BuzzerManager::playAntennaErrorSequence();
-                        Logger::logOperation("ANT_ERR_UNSUPPORTED");
-                    }
-                }
             }
         } else {
-            if (_buttonIsDown) {
-                unsigned long pressDuration = now - _buttonPressStartTime;
-                _buttonIsDown = false;
+            unsigned long dt = now - _buttonLastSampleMs;
+            if (dt > 100UL) dt = 100UL;
+            _buttonLastSampleMs = now;
 
-                if (!_button3sTriggered && !_button10sTriggered && pressDuration > 50UL) {
-                    if (_isPairingMode) {
-                        _isPairingMode = false;
-                        LedIndicator::setState(LED_IDLE);
-                        _needsUpdateStateBeacon = true;
-                        Serial.println("Modalità accoppiamento annullata tramite pressione breve.");
-                    } else if (RollingCodeManager::hasAnyClient()) {
-                        LedIndicator::setState(LED_HEARTBEAT);
-                        Serial.println("Pulsante premuto: Heartbeat di diagnostica attivato.");
+            if (btnMask != 0) {
+                _buttonPinMask |= btnMask;
+                if (_buttonReleasePending) {
+                    if (_buttonRecoveryStartMs == 0) {
+                        _buttonRecoveryStartMs = now;
+                    } else if (now - _buttonRecoveryStartMs >= BTN_RECOVERY_MIN_MS) {
+                        _buttonReleasePending = false;
+                        _buttonAccumulatedLowMs += (now - _buttonRecoveryStartMs);
+                        _buttonRecoveryStartMs = 0;
+                        _buttonLastLowTime = now;
+                        _buttonDropoutCount++;
+                    }
+                } else {
+                    _buttonAccumulatedLowMs += dt;
+                    _buttonLastLowTime = now;
+                }
+
+                if (!_buttonReleasePending) {
+                    unsigned long wallHeldMs = now - _buttonPressStartTime;
+
+                    if (!_button3sTriggered && _buttonAccumulatedLowMs >= 250UL) {
+                        if (_buttonLastProgressSec < 1 && wallHeldMs >= 1000UL && wallHeldMs < BTN_HOLD_3S_WALL_MS) {
+                            _buttonLastProgressSec = 1;
+                            char pinLabel[40];
+                            formatButtonPinLabel(_buttonPinMask, pinLabel, sizeof(pinLabel));
+                            Serial.printf("[Pulsante %s] Pressione mantenuta: 1s / 3s (contatto LOW: %lu ms, micro-distacchi: %u)...\n",
+                                          pinLabel, _buttonAccumulatedLowMs, (unsigned int)_buttonDropoutCount);
+                        } else if (_buttonLastProgressSec < 2 && wallHeldMs >= 2000UL && wallHeldMs < BTN_HOLD_3S_WALL_MS) {
+                            _buttonLastProgressSec = 2;
+                            char pinLabel[40];
+                            formatButtonPinLabel(_buttonPinMask, pinLabel, sizeof(pinLabel));
+                            Serial.printf("[Pulsante %s] Pressione mantenuta: 2s / 3s (contatto LOW: %lu ms, micro-distacchi: %u)...\n",
+                                          pinLabel, _buttonAccumulatedLowMs, (unsigned int)_buttonDropoutCount);
+                        }
+                    }
+
+                    if (!_button3sTriggered &&
+                        wallHeldMs >= BTN_HOLD_3S_WALL_MS &&
+                        _buttonAccumulatedLowMs >= BTN_HOLD_3S_MIN_LOW_MS) {
+                        _button3sTriggered = true;
+                        char pinLabel[40];
+                        formatButtonPinLabel(_buttonPinMask, pinLabel, sizeof(pinLabel));
+                        Serial.printf("[Pulsante %s] Soglia 3s raggiunta (durata: %lu ms, contatto LOW: %lu ms, micro-distacchi: %u).\n",
+                                      pinLabel, wallHeldMs, _buttonAccumulatedLowMs, (unsigned int)_buttonDropoutCount);
+                        enterPairingMode();
+                        Logger::logOperation("PAIR_MODE_BTN");
+                    }
+
+                    if (!_button10sTriggered &&
+                        wallHeldMs >= BTN_HOLD_10S_WALL_MS &&
+                        _buttonAccumulatedLowMs >= BTN_HOLD_10S_MIN_LOW_MS) {
+                        _button10sTriggered = true;
+                        if (AntennaManager::isSupported()) {
+                            // Su schede con switch RF (es. XIAO ESP32-C6), 10s annulla il pairing e commuta l'antenna
+                            _isPairingMode = false;
+                            _needsUpdateStateBeacon = true;
+                            LedIndicator::setState(LED_IDLE);
+                            Serial.println("Pulsante tenuto premuto per 10 secondi: Toggle Antenna!");
+                            AntennaState result = AntennaManager::toggle();
+                            if (result == ANTENNA_INTERNAL) {
+                                BuzzerManager::playAntennaInternalSequence();
+                                Logger::logOperation("ANT_INTERNA");
+                            } else if (result == ANTENNA_EXTERNAL) {
+                                BuzzerManager::playAntennaExternalSequence();
+                                Logger::logOperation("ANT_ESTERNA");
+                            }
+                        } else {
+                            Serial.println("Pulsante tenuto premuto per 10 secondi: antenna esterna non supportata su questa scheda (Pairing Mode mantenuto attivo).");
+                            BuzzerManager::playAntennaErrorSequence();
+                            Logger::logOperation("ANT_ERR_UNSUPPORTED");
+                        }
                     }
                 }
-                _button3sTriggered = false;
-                _button10sTriggered = false;
+            } else {
+                _buttonRecoveryStartMs = 0;
+                if (!_buttonReleasePending) {
+                    _buttonReleasePending = true;
+                    _buttonReleaseStartTime = now;
+                } else if (now - _buttonReleaseStartTime >= BTN_RELEASE_DEBOUNCE_MS) {
+                    unsigned long effectiveSpanMs = (_buttonLastLowTime >= _buttonPressStartTime)
+                                                    ? (_buttonLastLowTime - _buttonPressStartTime)
+                                                    : 0UL;
+                    unsigned long totalLowMs = _buttonAccumulatedLowMs;
+                    uint8_t usedMask = _buttonPinMask;
+                    uint16_t dropouts = _buttonDropoutCount;
+                    bool was3s = _button3sTriggered;
+                    bool was10s = _button10sTriggered;
+
+                    _buttonIsDown = false;
+                    _buttonReleasePending = false;
+                    _button3sTriggered = false;
+                    _button10sTriggered = false;
+
+                    if (!was3s && !was10s && totalLowMs >= BTN_PRESS_MIN_MS) {
+                        char pinLabel[40];
+                        formatButtonPinLabel(usedMask, pinLabel, sizeof(pinLabel));
+
+                        if (effectiveSpanMs <= BTN_SHORT_PRESS_MAX_MS) {
+                            if (_isPairingMode) {
+                                unsigned long pairNow = millis();
+                                if (pairNow >= _pairingStartTime && (pairNow - _pairingStartTime >= BTN_PAIR_CANCEL_GUARD_MS)) {
+                                    _isPairingMode = false;
+                                    LedIndicator::setState(LED_IDLE);
+                                    _needsUpdateStateBeacon = true;
+                                    Serial.printf("Modalità accoppiamento annullata tramite pressione breve [%s].\n", pinLabel);
+                                }
+                            } else if (RollingCodeManager::hasAnyClient()) {
+                                LedIndicator::setState(LED_HEARTBEAT);
+                                Serial.printf("Pulsante [%s] premuto (%lu ms): Heartbeat di diagnostica attivato.\n",
+                                              pinLabel, totalLowMs);
+                            }
+                        } else {
+                            Serial.printf("Pulsante [%s] rilasciato dopo %lu ms (contatto LOW: %lu ms, micro-distacchi: %u) - tieni premuto per 3s per attivare l'accoppiamento.\n",
+                                          pinLabel, effectiveSpanMs, totalLowMs, (unsigned int)dropouts);
+                        }
+                    }
+                }
             }
         }
     }
 
-    // Gestione Modalità Accoppiamento: doppio beep ogni secondo e timeout a 60 secondi
+    // Gestione Modalità Accoppiamento: doppio beep ogni secondo e timeout a 60 secondi.
+    // Usa millis() aggiornato (e non `now` letto a inizio loop) per evitare underflow unsigned
+    // nello stesso ciclo in cui enterPairingMode() imposta _pairingStartTime = millis().
     if (_isPairingMode) {
-        if (now - _pairingStartTime >= 60000UL) {
+        unsigned long pairNow = millis();
+        if (pairNow >= _pairingStartTime && (pairNow - _pairingStartTime >= 60000UL)) {
             _isPairingMode = false;
             LedIndicator::setState(LED_IDLE);
             Serial.println("Timeout modalità Accoppiamento (60s) scaduto.");
             updateStateBeacon();
-        } else if (now - _lastPairingBeepTime >= 1000UL) {
-            _lastPairingBeepTime = now;
+        } else if (pairNow >= _lastPairingBeepTime && (pairNow - _lastPairingBeepTime >= 1000UL)) {
+            _lastPairingBeepTime = pairNow;
             BuzzerManager::playPairingTickSequence();
         }
     }
@@ -722,6 +865,10 @@ void BleHandler::loop() {
 
 void BleHandler::pause() {
     _isPaused = true;
+    _buttonIsDown = false;
+    _buttonReleasePending = false;
+    _button3sTriggered = false;
+    _button10sTriggered = false;
     if (OtaManager::isActive()) {
         OtaManager::abortOtaSession("OTA_INTERROTTO_CLI");
     }
