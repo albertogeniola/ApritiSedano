@@ -15,8 +15,8 @@ android {
         applicationId = "it.geniola.apritisedano"
         minSdk = 35
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.5 (b19 - 2026-11-01 12:53 UTC)"
+        versionCode = 20
+        versionName = "1.5 (b20 - 2026-11-01 14:21 UTC)"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
