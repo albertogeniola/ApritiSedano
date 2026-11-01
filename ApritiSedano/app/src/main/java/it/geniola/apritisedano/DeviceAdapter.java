@@ -1,5 +1,6 @@
 package it.geniola.apritisedano;
 
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -104,10 +105,20 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
     public void tickPairingCountdowns() {
         for (int i = 0; i < deviceList.size(); i++) {
             Device d = deviceList.get(i);
+            boolean changed = false;
             if (d.getCurrentState() == 5) {
                 if (d.getRemainingPairingSeconds() <= 0) {
                     d.setCurrentState(-1);
                 }
+                changed = true;
+            }
+            if (d.isActionPending()) {
+                if (d.getRemainingActionSeconds() <= 0) {
+                    d.setActionPending(false);
+                }
+                changed = true;
+            }
+            if (changed) {
                 notifyItemChanged(i);
             }
         }
@@ -167,10 +178,24 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
         }
 
         if (device.isActionPending()) {
-            holder.btnAction.setEnabled(false);
-            holder.btnAction.setText("ATTENDI...");
-        } else {
+            int remActionSec = Math.max(0, device.getRemainingActionSeconds());
+            holder.tvActionTimer.setVisibility(View.VISIBLE);
+            holder.tvActionTimer.setText(String.format(Locale.US, "⏱️ Invio comando: %ds", remActionSec));
+
             holder.btnAction.setEnabled(true);
+            holder.btnAction.setText("Annulla");
+            holder.btnAction.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#D32F2F")));
+            holder.btnAction.setTextColor(Color.WHITE);
+        } else {
+            holder.tvActionTimer.setVisibility(View.GONE);
+
+            holder.btnAction.setEnabled(true);
+            if (holder.defaultBtnTint != null) {
+                holder.btnAction.setBackgroundTintList(holder.defaultBtnTint);
+            }
+            if (holder.defaultBtnTextColors != null) {
+                holder.btnAction.setTextColor(holder.defaultBtnTextColors);
+            }
             if (device.getCurrentState() == 1) {
                 holder.btnAction.setText("CHIUDI");
             } else {
@@ -201,8 +226,11 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
         TextView tvDeviceMac;
         TextView tvAntennaBadge;
         TextView tvDeviceState;
+        TextView tvActionTimer;
         Button btnAction;
         ImageView ivSettings;
+        ColorStateList defaultBtnTint;
+        ColorStateList defaultBtnTextColors;
 
         public DeviceViewHolder(@NonNull View itemView) {
             super(itemView);
@@ -210,8 +238,13 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
             tvDeviceMac = itemView.findViewById(R.id.tv_device_mac);
             tvAntennaBadge = itemView.findViewById(R.id.tv_antenna_badge);
             tvDeviceState = itemView.findViewById(R.id.tv_device_state);
+            tvActionTimer = itemView.findViewById(R.id.tv_action_timer);
             btnAction = itemView.findViewById(R.id.btn_action);
             ivSettings = itemView.findViewById(R.id.iv_settings);
+            if (btnAction != null) {
+                defaultBtnTint = btnAction.getBackgroundTintList();
+                defaultBtnTextColors = btnAction.getTextColors();
+            }
         }
     }
 }

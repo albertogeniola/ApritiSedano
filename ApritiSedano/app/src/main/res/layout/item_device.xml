@@ -90,15 +90,32 @@
             android:gravity="center_vertical"
             android:layout_marginTop="16dp">
 
-            <TextView
-                android:id="@+id/tv_device_state"
+            <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Stato: SCONOSCIUTO"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:textColor="#757575"/>
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tv_device_state"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Stato: SCONOSCIUTO"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="#757575"/>
+
+                <TextView
+                    android:id="@+id/tv_action_timer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="⏱️ Invio comando: 180s"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#D32F2F"
+                    android:visibility="gone" />
+            </LinearLayout>
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btn_action"

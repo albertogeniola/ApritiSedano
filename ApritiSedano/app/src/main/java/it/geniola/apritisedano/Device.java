@@ -17,6 +17,7 @@ public class Device {
     private long lastSeen = 0;
     private long pairingEndTimeMs = 0;
     private boolean isActionPending = false;
+    private long actionEndTimeMs = 0;
 
     public Device(String macAddress, String name, String secretKey) {
         this(macAddress, name, secretKey, TOTPGenerator.generateRandomClientId(), 0L, false);
@@ -128,6 +129,18 @@ public class Device {
 
     public void setActionPending(boolean pending) {
         this.isActionPending = pending;
+        if (pending) {
+            this.actionEndTimeMs = System.currentTimeMillis() + 180_000L;
+        } else {
+            this.actionEndTimeMs = 0L;
+        }
+    }
+
+    public int getRemainingActionSeconds() {
+        if (!isActionPending || actionEndTimeMs <= 0) return 0;
+        long diffMs = actionEndTimeMs - System.currentTimeMillis();
+        if (diffMs <= 0) return 0;
+        return (int) Math.min(180L, (diffMs + 999L) / 1000L);
     }
 
     public JSONObject toJson() throws JSONException {

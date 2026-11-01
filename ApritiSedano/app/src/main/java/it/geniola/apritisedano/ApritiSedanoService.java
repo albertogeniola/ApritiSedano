@@ -96,6 +96,15 @@ public class ApritiSedanoService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = (intent != null && intent.getAction() != null) ? intent.getAction() : ACTION_TRIGGER;
         if (ACTION_STOP.equals(action)) {
+            if (!operationCompleted) {
+                operationCompleted = true;
+                DebugLogger.getInstance().addLog(new DebugLogEntry(
+                        System.currentTimeMillis(),
+                        false,
+                        "",
+                        String.format(Locale.US, "COMANDO ANNULLATO (Cnt=%d scartato)", currentUsedCounter)
+                ));
+            }
             timeoutHandler.removeCallbacksAndMessages(null);
             stopSelf();
             return START_NOT_STICKY;
@@ -113,7 +122,7 @@ public class ApritiSedanoService extends Service {
         }
 
         operationCompleted = false;
-        currentUsedCounter = 0L;
+        currentUsedCounter = intent != null ? intent.getLongExtra(EXTRA_USED_COUNTER, 0L) : 0L;
         String targetMac = intent != null ? intent.getStringExtra(EXTRA_TARGET_MAC) : null;
         String secretKey = intent != null ? intent.getStringExtra(EXTRA_SECRET_KEY) : null;
         int clientId = intent != null ? intent.getIntExtra(EXTRA_CLIENT_ID, 0) : 0;
@@ -204,7 +213,9 @@ public class ApritiSedanoService extends Service {
             );
             debugDesc = String.format(Locale.US, "TIME_SYNC (TS=%d)", ts);
         } else {
-            long counter = DeviceManager.incrementAndGetCounter(this, targetMac);
+            long counter = (this.currentUsedCounter > 0)
+                    ? this.currentUsedCounter
+                    : DeviceManager.incrementAndGetCounter(this, targetMac);
             if (counter <= 0) {
                 notifyCompletion("NACK_ERR");
                 stopSelf();
@@ -421,6 +432,15 @@ public class ApritiSedanoService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        if (!operationCompleted) {
+            operationCompleted = true;
+            DebugLogger.getInstance().addLog(new DebugLogEntry(
+                    System.currentTimeMillis(),
+                    false,
+                    "",
+                    String.format(Locale.US, "COMANDO ANNULLATO (Cnt=%d scartato)", currentUsedCounter)
+            ));
+        }
         timeoutHandler.removeCallbacksAndMessages(null);
         if (advertiser != null && checkBluetoothPermissions()) {
             try { advertiser.stopAdvertising(advertiseCallback); } catch (Exception ignored) {}

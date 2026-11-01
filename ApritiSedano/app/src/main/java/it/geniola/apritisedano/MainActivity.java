@@ -618,9 +618,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void onDeviceActionClick(Device device) {
+        if (device.isActionPending()) {
+            cancelPendingAction(device);
+            return;
+        }
         if (!hasRequiredPermissions()) {
             checkAndRequestPermissions();
             return;
+        }
+        long usedCounter = DeviceManager.incrementAndGetCounter(this, device.getMacAddress());
+        if (usedCounter > 0) {
+            device.setCounter(usedCounter);
         }
         deviceAdapter.markActionPending(device.getMacAddress(), true);
 
@@ -629,8 +637,17 @@ public class MainActivity extends AppCompatActivity {
         serviceIntent.putExtra(ApritiSedanoService.EXTRA_TARGET_MAC, device.getMacAddress());
         serviceIntent.putExtra(ApritiSedanoService.EXTRA_SECRET_KEY, device.getSecretKey());
         serviceIntent.putExtra(ApritiSedanoService.EXTRA_CLIENT_ID, device.getClientId());
+        serviceIntent.putExtra(ApritiSedanoService.EXTRA_USED_COUNTER, usedCounter);
 
         startServiceCompat(serviceIntent);
+    }
+
+    private void cancelPendingAction(Device device) {
+        deviceAdapter.markActionPending(device.getMacAddress(), false);
+        Intent stopIntent = new Intent(this, ApritiSedanoService.class);
+        stopIntent.setAction(ApritiSedanoService.ACTION_STOP);
+        stopService(stopIntent);
+        Toast.makeText(this, "Comando annullato (codice scartato).", Toast.LENGTH_SHORT).show();
     }
 
     private void startServiceCompat(Intent serviceIntent) {
@@ -808,7 +825,76 @@ public class MainActivity extends AppCompatActivity {
         this.pendingOtaDevice = device;
         this.pendingOtaFirmwareBytes = null;
         this.pendingOtaSha256 = null;
-        otaFilePickerLauncher.launch(new String[]{"application/octet-stream", "*/*"});
+
+        final CharSequence[] otaChoices = new CharSequence[]{
+                "📦 XIAO ESP32-C6 (Integrato v1.1)\nChip: ESP32-C6 • Default: Ant. Interna Ceramica, LED RGB D0, Relè D1, Sensore D2, Buzzer Passivo D3",
+                "📦 ESP32-WROOM-32 (Integrato v1.1)\nChip: ESP32 • Default: Ant. PCB fissa, LED D2, Relè D4, Sensore D5, Buzzer Passivo D18",
+                "📂 Scegli file personalizzato (.bin) dal telefono..."
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle("Seleziona Firmware OTA")
+                .setItems(otaChoices, (dialog, which) -> {
+                    if (which == 0) {
+                        loadBundledOtaFirmware(
+                                device,
+                                "ApritiSedano_XIAO_ESP32C6_InternalAntenna.bin",
+                                "XIAO ESP32-C6 (v1.1 • Default: Antenna Interna Ceramica)"
+                        );
+                    } else if (which == 1) {
+                        loadBundledOtaFirmware(
+                                device,
+                                "ApritiSedano_ESP32_WROOM.bin",
+                                "ESP32-WROOM-32 (v1.1 • Default: Antenna PCB Fissa)"
+                        );
+                    } else {
+                        otaFilePickerLauncher.launch(new String[]{"application/octet-stream", "*/*"});
+                    }
+                })
+                .setNegativeButton("Annulla", null)
+                .show();
+    }
+
+    private void loadBundledOtaFirmware(Device device, String assetFileName, String displayLabel) {
+        byte[] fwBytes = readBundledFirmwareBytes(assetFileName);
+        if (fwBytes == null) {
+            showResultAlertDialog("Errore Risorsa Firmware", "Impossibile caricare il firmware integrato: " + assetFileName);
+            return;
+        }
+        validateAndConfirmOtaFirmware(device, displayLabel + " [" + assetFileName + "]", fwBytes);
+    }
+
+    private byte[] readBundledFirmwareBytes(String fileName) {
+        try (InputStream is = getAssets().open("firmware/" + fileName)) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int r;
+            while ((r = is.read(buf)) != -1) {
+                bos.write(buf, 0, r);
+            }
+            return bos.toByteArray();
+        } catch (Exception e) {
+            Log.w(TAG, "Firmware non presente in assets/firmware/" + fileName + ", provo in Download...", e);
+        }
+
+        File downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+        File fwFile = new File(downloadDir, fileName);
+        if (!fwFile.exists() || fwFile.length() == 0) {
+            fwFile = new File("/sdcard/Download", fileName);
+        }
+        if (fwFile.exists() && fwFile.length() > 0) {
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(fwFile)) {
+                byte[] bytes = new byte[(int) fwFile.length()];
+                int read = 0;
+                while (read < bytes.length) {
+                    int r = fis.read(bytes, read, bytes.length - read);
+                    if (r < 0) break;
+                    read += r;
+                }
+                return bytes;
+            } catch (Exception ignored) {}
+        }
+        return null;
     }
 
     private String queryDisplayName(Uri uri) {
@@ -858,6 +944,10 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        validateAndConfirmOtaFirmware(device, fileName, fwBytes);
+    }
+
+    private void validateAndConfirmOtaFirmware(Device device, String fileName, byte[] fwBytes) {
         if (fwBytes.length < 65536) {
             showResultAlertDialog(
                     "File Firmware Non Valido",
@@ -890,9 +980,10 @@ public class MainActivity extends AppCompatActivity {
 
         String msg = String.format(Locale.US,
                 "Dispositivo: %s (%s)\n" +
-                "File: %s\n" +
+                "Firmware: %s\n" +
                 "Dimensione: %.1f KB (%d byte)\n" +
                 "SHA-256: %s...\n\n" +
+                "Nota: la partizione NVS (chiavi e ruolo Master) viene preservata.\n" +
                 "Durante l'aggiornamento mantieni lo smartphone vicino al ricevitore e non chiudere l'applicazione.",
                 device.getName(),
                 device.getMacAddress(),
@@ -1863,27 +1954,46 @@ public class MainActivity extends AppCompatActivity {
         container.addView(btnPickFile);
 
         TextView tvQuickHeader = new TextView(this);
-        tvQuickHeader.setText("Oppure seleziona firmware pronti in Download:");
-        tvQuickHeader.setTextSize(12f);
-        tvQuickHeader.setTextColor(Color.parseColor("#616161"));
-        tvQuickHeader.setPadding(0, dpToPx(8), 0, dpToPx(4));
+        tvQuickHeader.setText("Oppure seleziona un firmware integrato nell'app (v1.1):");
+        tvQuickHeader.setTextSize(12.5f);
+        tvQuickHeader.setTypeface(null, Typeface.BOLD);
+        tvQuickHeader.setTextColor(Color.parseColor("#424242"));
+        tvQuickHeader.setPadding(0, dpToPx(10), 0, dpToPx(2));
         container.addView(tvQuickHeader);
+
+        TextView tvFwDefaultsInfo = new TextView(this);
+        tvFwDefaultsInfo.setText(
+                "• XIAO ESP32-C6 (Chip: ESP32-C6) — Default: Antenna Interna Ceramica (commutabile a U.FL esterna via CLI/tasto 10s), LED RGB D0, Relè D1, Sensore D2, Buzzer Passivo D3\n" +
+                "• ESP32-WROOM-32 (Chip: ESP32) — Default: Antenna PCB fissa, LED D2, Relè D4, Sensore D5, Buzzer Passivo D18"
+        );
+        tvFwDefaultsInfo.setTextSize(11f);
+        tvFwDefaultsInfo.setTextColor(Color.parseColor("#616161"));
+        tvFwDefaultsInfo.setPadding(0, 0, 0, dpToPx(6));
+        container.addView(tvFwDefaultsInfo);
 
         LinearLayout quickRow1 = new LinearLayout(this);
         quickRow1.setOrientation(LinearLayout.HORIZONTAL);
 
         Button btnQuickWroom = new Button(this);
-        btnQuickWroom.setText("ESP32-WROOM");
-        btnQuickWroom.setTextSize(11f);
+        btnQuickWroom.setText("WROOM v1.1 (App 0x10000)");
+        btnQuickWroom.setTextSize(10.5f);
         btnQuickWroom.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        btnQuickWroom.setOnClickListener(v -> loadPredefinedFirmware("ApritiSedano_ESP32_WROOM.bin", 0x10000));
+        btnQuickWroom.setOnClickListener(v -> loadPredefinedFirmware(
+                "ApritiSedano_ESP32_WROOM.bin",
+                0x10000,
+                "ESP32-WROOM v1.1 (App 0x10000 • Default: Ant. PCB fissa)"
+        ));
         quickRow1.addView(btnQuickWroom);
 
         Button btnQuickXiao = new Button(this);
-        btnQuickXiao.setText("XIAO C6 (Ant. Interna)");
-        btnQuickXiao.setTextSize(11f);
+        btnQuickXiao.setText("XIAO C6 v1.1 (App 0x10000)");
+        btnQuickXiao.setTextSize(10.5f);
         btnQuickXiao.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        btnQuickXiao.setOnClickListener(v -> loadPredefinedFirmware("ApritiSedano_XIAO_ESP32C6_InternalAntenna.bin", 0x10000));
+        btnQuickXiao.setOnClickListener(v -> loadPredefinedFirmware(
+                "ApritiSedano_XIAO_ESP32C6_InternalAntenna.bin",
+                0x10000,
+                "XIAO ESP32-C6 v1.1 (App 0x10000 • Default: Ant. Interna)"
+        ));
         quickRow1.addView(btnQuickXiao);
 
         container.addView(quickRow1);
@@ -1892,17 +2002,25 @@ public class MainActivity extends AppCompatActivity {
         quickRow2.setOrientation(LinearLayout.HORIZONTAL);
 
         Button btnQuickWroomMerged = new Button(this);
-        btnQuickWroomMerged.setText("WROOM Full (4MB)");
-        btnQuickWroomMerged.setTextSize(11f);
+        btnQuickWroomMerged.setText("WROOM v1.1 Full (0x0000)");
+        btnQuickWroomMerged.setTextSize(10.5f);
         btnQuickWroomMerged.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        btnQuickWroomMerged.setOnClickListener(v -> loadPredefinedFirmware("ApritiSedano_ESP32_WROOM_full_merged.bin", 0x0000));
+        btnQuickWroomMerged.setOnClickListener(v -> loadPredefinedFirmware(
+                "ApritiSedano_ESP32_WROOM_full_merged.bin",
+                0x0000,
+                "ESP32-WROOM v1.1 Full Merged (0x0000 • Default: Ant. PCB fissa)"
+        ));
         quickRow2.addView(btnQuickWroomMerged);
 
         Button btnQuickXiaoMerged = new Button(this);
-        btnQuickXiaoMerged.setText("XIAO C6 Full (4MB)");
-        btnQuickXiaoMerged.setTextSize(11f);
+        btnQuickXiaoMerged.setText("XIAO C6 v1.1 Full (0x0000)");
+        btnQuickXiaoMerged.setTextSize(10.5f);
         btnQuickXiaoMerged.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        btnQuickXiaoMerged.setOnClickListener(v -> loadPredefinedFirmware("ApritiSedano_XIAO_ESP32C6_InternalAntenna_full_merged.bin", 0x0000));
+        btnQuickXiaoMerged.setOnClickListener(v -> loadPredefinedFirmware(
+                "ApritiSedano_XIAO_ESP32C6_InternalAntenna_full_merged.bin",
+                0x0000,
+                "XIAO ESP32-C6 v1.1 Full Merged (0x0000 • Default: Ant. Interna)"
+        ));
         quickRow2.addView(btnQuickXiaoMerged);
 
         container.addView(quickRow2);
@@ -2008,38 +2126,21 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void loadPredefinedFirmware(String fileName, int defaultOffset) {
-        File downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
-        File fwFile = new File(downloadDir, fileName);
-        if (!fwFile.exists() || fwFile.length() == 0) {
-            fwFile = new File("/sdcard/Download", fileName);
-        }
-
-        if (!fwFile.exists() || fwFile.length() == 0) {
-            Toast.makeText(this, "File non trovato in Download: " + fileName, Toast.LENGTH_SHORT).show();
+    private void loadPredefinedFirmware(String fileName, int defaultOffset, String displayLabel) {
+        byte[] bytes = readBundledFirmwareBytes(fileName);
+        if (bytes == null || bytes.length == 0) {
+            Toast.makeText(this, "Firmware non trovato: " + fileName, Toast.LENGTH_SHORT).show();
             return;
         }
+        pendingCableFirmwareBytes = bytes;
+        pendingCableFirmwareName = (displayLabel != null && !displayLabel.isEmpty()) ? displayLabel : fileName;
+        pendingCableFlashOffset = defaultOffset;
 
-        try (java.io.FileInputStream fis = new java.io.FileInputStream(fwFile)) {
-            byte[] bytes = new byte[(int) fwFile.length()];
-            int read = 0;
-            while (read < bytes.length) {
-                int r = fis.read(bytes, read, bytes.length - read);
-                if (r < 0) break;
-                read += r;
-            }
-            pendingCableFirmwareBytes = bytes;
-            pendingCableFirmwareName = fileName;
-            pendingCableFlashOffset = defaultOffset;
-
-            if (etCableOffset != null) {
-                etCableOffset.setText(String.format(Locale.US, "0x%05X", pendingCableFlashOffset));
-            }
-            updateCableFirmwareStatusText();
-            Toast.makeText(this, "Caricato: " + fileName, Toast.LENGTH_SHORT).show();
-        } catch (Exception e) {
-            Toast.makeText(this, "Errore lettura file: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        if (etCableOffset != null) {
+            etCableOffset.setText(String.format(Locale.US, "0x%05X", pendingCableFlashOffset));
         }
+        updateCableFirmwareStatusText();
+        Toast.makeText(this, "Caricato: " + pendingCableFirmwareName, Toast.LENGTH_SHORT).show();
     }
 
     private void startCableFlashingProcess() {
