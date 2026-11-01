@@ -5,19 +5,22 @@
         <item name="colorPrimary">@color/sedano_primary</item>
         <item name="colorPrimaryVariant">@color/sedano_primary_dark</item>
         <item name="colorOnPrimary">@color/white</item>
-        
+
         <!-- Secondary brand color. -->
         <item name="colorSecondary">@color/sedano_accent</item>
         <item name="colorSecondaryVariant">@color/sedano_accent</item>
         <item name="colorOnSecondary">@color/black</item>
-        
+
         <!-- Backgrounds -->
         <item name="android:windowBackground">@color/bg_dark</item>
         <item name="colorSurface">@color/surface_dark</item>
         <item name="android:textColorPrimary">@color/text_primary_dark</item>
-        
+
         <!-- Status bar color. -->
         <item name="android:statusBarColor">?attr/colorPrimary</item>
         <item name="android:windowLightStatusBar">false</item>
+
+        <!-- Modern rounded BottomSheet style -->
+        <item name="bottomSheetDialogTheme">@style/ThemeOverlay.ApritiSedano.BottomSheetDialog</item>
     </style>
 </resources>

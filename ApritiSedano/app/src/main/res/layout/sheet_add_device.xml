@@ -1,216 +1,341 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@drawable/bg_bottom_sheet"
-    android:orientation="vertical"
-    android:paddingStart="20dp"
-    android:paddingEnd="20dp"
-    android:paddingTop="12dp"
-    android:paddingBottom="24dp">
+    android:clipToPadding="false"
+    android:overScrollMode="never">
 
-    <View
-        android:layout_width="36dp"
-        android:layout_height="4dp"
-        android:layout_gravity="center_horizontal"
-        android:background="@drawable/bg_sheet_handle" />
-
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:layout_marginBottom="4dp"
-        android:text="Aggiungi dispositivo"
-        android:textColor="?android:attr/textColorPrimary"
-        android:textSize="20sp"
-        android:textStyle="bold" />
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="24dp">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
-        android:text="Scegli il tipo di varco da configurare"
-        android:textColor="#5F6368"
-        android:textSize="13.5sp" />
+        <View
+            android:layout_width="40dp"
+            android:layout_height="4.5dp"
+            android:layout_gravity="center_horizontal"
+            android:background="@drawable/bg_sheet_handle" />
 
-    <!-- Opzione 1: Ricevitore BLE -->
-    <com.google.android.material.card.MaterialCardView
-        android:id="@+id/card_add_ble"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="10dp"
-        android:clickable="true"
-        android:focusable="true"
-        app:cardBackgroundColor="?attr/colorSurface"
-        app:cardCornerRadius="14dp"
-        app:cardElevation="0dp"
-        app:strokeColor="#E0E4E8"
-        app:strokeWidth="1dp">
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Aggiungi dispositivo"
+            android:textColor="?android:attr/textColorPrimary"
+            android:textSize="21sp"
+            android:textStyle="bold" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="16dp"
+            android:text="Tocca una delle opzioni qui sotto per procedere"
+            android:textColor="@color/sheet_text_secondary"
+            android:textSize="13.5sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginBottom="10dp"
+            android:letterSpacing="0.08"
+            android:text="NUOVA CONFIGURAZIONE"
+            android:textColor="@color/sheet_section_label"
+            android:textSize="11.5sp"
+            android:textStyle="bold" />
+
+        <!-- Opzione 1: Ricevitore BLE -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/card_add_ble"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:layout_marginBottom="16dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:stateListAnimator="@animator/option_card_press"
+            app:cardBackgroundColor="@color/sheet_card_bg"
+            app:cardCornerRadius="18dp"
+            app:cardElevation="4dp"
+            app:rippleColor="@color/option_ripple_green"
+            app:strokeColor="@color/option_stroke_green"
+            app:strokeWidth="1.5dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="16dp">
+
+                <ImageView
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/bg_icon_green"
+                    android:contentDescription="@null"
+                    android:padding="11dp"
+                    android:src="@drawable/ic_garage"
+                    app:tint="@color/option_accent_green" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="14dp"
+                    android:layout_marginEnd="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Ricevitore BLE"
+                        android:textColor="?android:attr/textColorPrimary"
+                        android:textSize="16.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Box offline • Rolling-Code"
+                        android:textColor="@color/sheet_text_secondary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="Tocca per cercare via Bluetooth"
+                        android:textColor="@color/option_accent_green"
+                        android:textSize="12.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_cta_circle_green"
+                    android:contentDescription="@null"
+                    android:elevation="2dp"
+                    android:padding="9dp"
+                    android:src="@drawable/ic_arrow_forward" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Opzione 2: Relè Shelly Cloud -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/card_add_shelly"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:stateListAnimator="@animator/option_card_press"
+            app:cardBackgroundColor="@color/sheet_card_bg"
+            app:cardCornerRadius="18dp"
+            app:cardElevation="4dp"
+            app:rippleColor="@color/option_ripple_blue"
+            app:strokeColor="@color/option_stroke_blue"
+            app:strokeWidth="1.5dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="16dp">
+
+                <ImageView
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/bg_icon_blue"
+                    android:contentDescription="@null"
+                    android:padding="11dp"
+                    android:src="@drawable/ic_cloud"
+                    app:tint="@color/option_accent_blue" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="14dp"
+                    android:layout_marginEnd="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Relè Shelly Cloud"
+                        android:textColor="?android:attr/textColorPrimary"
+                        android:textSize="16.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Cancello • Auto-apertura Android Auto"
+                        android:textColor="@color/sheet_text_secondary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="Tocca per configurare il relè"
+                        android:textColor="@color/option_accent_blue"
+                        android:textSize="12.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_cta_circle_blue"
+                    android:contentDescription="@null"
+                    android:elevation="2dp"
+                    android:padding="9dp"
+                    android:src="@drawable/ic_arrow_forward" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Separatore di sezione per il ripristino -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="14dp"
             android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:padding="14dp">
+            android:orientation="horizontal">
 
-            <ImageView
-                android:layout_width="44dp"
-                android:layout_height="44dp"
-                android:background="@drawable/bg_icon_green"
-                android:padding="10dp"
-                android:src="@drawable/ic_garage"
-                app:tint="#2E7D32" />
-
-            <LinearLayout
+            <View
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="14dp"
+                android:layout_height="1dp"
                 android:layout_weight="1"
-                android:orientation="vertical">
+                android:background="@color/sheet_divider" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Ricevitore BLE"
-                    android:textColor="?android:attr/textColorPrimary"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_marginEnd="12dp"
+                android:letterSpacing="0.08"
+                android:text="HAI GIÀ UN BACKUP?"
+                android:textColor="@color/sheet_section_label"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="Box offline • Rolling-Code"
-                    android:textColor="#5F6368"
-                    android:textSize="13sp" />
-            </LinearLayout>
-
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:src="@drawable/ic_chevron_right" />
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1"
+                android:background="@color/sheet_divider" />
         </LinearLayout>
-    </com.google.android.material.card.MaterialCardView>
 
-    <!-- Opzione 2: Relè Shelly Cloud -->
-    <com.google.android.material.card.MaterialCardView
-        android:id="@+id/card_add_shelly"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="10dp"
-        android:clickable="true"
-        android:focusable="true"
-        app:cardBackgroundColor="?attr/colorSurface"
-        app:cardCornerRadius="14dp"
-        app:cardElevation="0dp"
-        app:strokeColor="#E0E4E8"
-        app:strokeWidth="1dp">
-
-        <LinearLayout
+        <!-- Opzione 3: Importa da Backup -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/card_add_import_backup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:padding="14dp">
-
-            <ImageView
-                android:layout_width="44dp"
-                android:layout_height="44dp"
-                android:background="@drawable/bg_icon_blue"
-                android:padding="10dp"
-                android:src="@drawable/ic_cloud"
-                app:tint="#1565C0" />
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:stateListAnimator="@animator/option_card_press"
+            app:cardBackgroundColor="@color/sheet_card_bg"
+            app:cardCornerRadius="18dp"
+            app:cardElevation="4dp"
+            app:rippleColor="@color/option_ripple_amber"
+            app:strokeColor="@color/option_stroke_amber"
+            app:strokeWidth="1.5dp">
 
             <LinearLayout
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="14dp"
-                android:layout_weight="1"
-                android:orientation="vertical">
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="16dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Relè Shelly Cloud"
-                    android:textColor="?android:attr/textColorPrimary"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
+                <ImageView
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/bg_icon_amber"
+                    android:contentDescription="@null"
+                    android:padding="11dp"
+                    android:src="@drawable/ic_upload"
+                    app:tint="@color/option_accent_amber" />
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <LinearLayout
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="Cancello • Auto-apertura Android Auto"
-                    android:textColor="#5F6368"
-                    android:textSize="13sp" />
+                    android:layout_marginStart="14dp"
+                    android:layout_marginEnd="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Ripristina da backup"
+                        android:textColor="?android:attr/textColorPrimary"
+                        android:textSize="16.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Importa dispositivi e seed da file"
+                        android:textColor="@color/sheet_text_secondary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="Tocca per scegliere il file"
+                        android:textColor="@color/option_accent_amber"
+                        android:textSize="12.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_cta_circle_amber"
+                    android:contentDescription="@null"
+                    android:elevation="2dp"
+                    android:padding="9dp"
+                    android:src="@drawable/ic_arrow_forward" />
             </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:src="@drawable/ic_chevron_right" />
-        </LinearLayout>
-    </com.google.android.material.card.MaterialCardView>
-
-    <!-- Opzione 3: Importa da Backup -->
-    <com.google.android.material.card.MaterialCardView
-        android:id="@+id/card_add_import_backup"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:clickable="true"
-        android:focusable="true"
-        app:cardBackgroundColor="#FAFAFB"
-        app:cardCornerRadius="14dp"
-        app:cardElevation="0dp"
-        app:strokeColor="#E8EAED"
-        app:strokeWidth="1dp">
-
-        <LinearLayout
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_cancel_add_sheet"
+            style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:padding="14dp">
+            android:layout_height="48dp"
+            android:layout_marginTop="18dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:text="Annulla"
+            android:textAllCaps="false"
+            android:textColor="@color/sheet_cancel_btn_text"
+            android:textSize="14.5sp"
+            android:textStyle="bold"
+            app:backgroundTint="@color/sheet_cancel_btn_bg"
+            app:cornerRadius="14dp" />
 
-            <ImageView
-                android:layout_width="44dp"
-                android:layout_height="44dp"
-                android:background="@drawable/bg_icon_amber"
-                android:padding="10dp"
-                android:src="@drawable/ic_upload"
-                app:tint="#EF6C00" />
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="14dp"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Ripristina da backup"
-                    android:textColor="?android:attr/textColorPrimary"
-                    android:textSize="15.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="Importa dispositivi e seed da file"
-                    android:textColor="#5F6368"
-                    android:textSize="13sp" />
-            </LinearLayout>
-
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:src="@drawable/ic_chevron_right" />
-        </LinearLayout>
-    </com.google.android.material.card.MaterialCardView>
-
-</LinearLayout>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

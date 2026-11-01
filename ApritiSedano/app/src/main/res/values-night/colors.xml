@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Palette BottomSheet & Option Cards (Dark) -->
+    <color name="sheet_canvas_bg">#14171D</color>
+    <color name="sheet_card_bg">#222731</color>
+    <color name="sheet_text_secondary">#A4ABB6</color>
+    <color name="sheet_section_label">#8A929E</color>
+    <color name="sheet_divider">#2E3542</color>
+    <color name="sheet_handle">#4D5565</color>
+    <color name="sheet_cancel_btn_bg">#2A303C</color>
+    <color name="sheet_cancel_btn_text">#E0E4EB</color>
+
+    <color name="option_icon_bg_green">#1B3620</color>
+    <color name="option_icon_bg_blue">#182D48</color>
+    <color name="option_icon_bg_amber">#3D2812</color>
+
+    <color name="option_stroke_green">#356B3B</color>
+    <color name="option_stroke_blue">#2D5B96</color>
+    <color name="option_stroke_amber">#87551A</color>
+
+    <color name="option_accent_green">#66BB6A</color>
+    <color name="option_accent_blue">#64B5F6</color>
+    <color name="option_accent_amber">#FFB74D</color>
+
+    <color name="option_ripple_green">#3366BB6A</color>
+    <color name="option_ripple_blue">#3364B5F6</color>
+    <color name="option_ripple_amber">#33FFB74D</color>
+</resources>

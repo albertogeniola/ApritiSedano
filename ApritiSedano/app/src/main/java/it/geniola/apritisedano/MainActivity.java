@@ -2550,6 +2550,11 @@ public class MainActivity extends AppCompatActivity {
             startImportGlobalBackupFlow();
         });
 
+        View btnCancel = view.findViewById(R.id.btn_cancel_add_sheet);
+        if (btnCancel != null) {
+            btnCancel.setOnClickListener(v -> sheet.dismiss());
+        }
+
         sheet.show();
     }
 
@@ -3162,6 +3167,11 @@ public class MainActivity extends AppCompatActivity {
             sheet.dismiss();
             startImportGlobalBackupFlow();
         });
+
+        View btnClose = view.findViewById(R.id.btn_close_backup_sheet);
+        if (btnClose != null) {
+            btnClose.setOnClickListener(v -> sheet.dismiss());
+        }
 
         sheet.show();
     }
