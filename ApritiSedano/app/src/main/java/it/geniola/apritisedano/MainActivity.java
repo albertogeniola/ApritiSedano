@@ -19,6 +19,13 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.LuminanceSource;
+import com.google.zxing.MultiFormatReader;
+import com.google.zxing.RGBLuminanceSource;
+import com.google.zxing.Result;
+import com.google.zxing.common.HybridBinarizer;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -304,6 +311,17 @@ public class MainActivity extends AppCompatActivity {
     private String pendingQrTargetMac = null;
     private String pendingQrDeviceName = null;
 
+    private final ActivityResultLauncher<String[]> qrImagePickerLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+                if (uri == null) {
+                    Toast.makeText(this, "Selezione immagine annullata", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                handleSelectedQrImageUri(uri);
+            }
+    );
+
     private final ActivityResultLauncher<String[]> otaFilePickerLauncher = registerForActivityResult(
             new ActivityResultContracts.OpenDocument(),
             uri -> {
@@ -314,40 +332,83 @@ public class MainActivity extends AppCompatActivity {
             }
     );
 
+    private boolean processScannedQrPayload(String scanned) {
+        if (scanned == null) return false;
+        scanned = scanned.trim();
+        try {
+            if (scanned.startsWith("apritisedano://rolling")) {
+                Uri uri = Uri.parse(scanned);
+                String seed = uri.getQueryParameter("seed");
+                String idStr = uri.getQueryParameter("id");
+                String cntStr = uri.getQueryParameter("cnt");
+                String qrName = uri.getQueryParameter("name");
+                String qrMac = uri.getQueryParameter("mac");
+
+                String targetMac = (pendingQrTargetMac != null) ? pendingQrTargetMac : qrMac;
+                String name = (pendingQrDeviceName != null && !pendingQrDeviceName.isEmpty())
+                        ? pendingQrDeviceName
+                        : (qrName != null && !qrName.isEmpty() ? qrName : "ApritiSedano");
+
+                int clientId = (idStr != null) ? Integer.parseInt(idStr) : TOTPGenerator.generateRandomClientId();
+                long counter = (cntStr != null) ? Long.parseLong(cntStr) : 0L;
+
+                if (targetMac != null && TOTPGenerator.isValidBase32Secret(seed)) {
+                    Device restored = new Device(targetMac, name, seed, clientId, counter);
+                    DeviceManager.addDevice(this, restored);
+                    deviceList = DeviceManager.getDevices(this);
+                    deviceAdapter.updateDevices(deviceList);
+                    Toast.makeText(this, "Backup dispositivo importato con successo!", Toast.LENGTH_SHORT).show();
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Errore importazione QR", e);
+        }
+        return false;
+    }
+
+    private void handleSelectedQrImageUri(Uri uri) {
+        try (java.io.InputStream is = getContentResolver().openInputStream(uri)) {
+            if (is == null) {
+                Toast.makeText(this, "Impossibile aprire l'immagine selezionata.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Bitmap bitmap = BitmapFactory.decodeStream(is);
+            if (bitmap == null) {
+                Toast.makeText(this, "File immagine non valido.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            int width = bitmap.getWidth();
+            int height = bitmap.getHeight();
+            int[] pixels = new int[width * height];
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+            LuminanceSource source = new RGBLuminanceSource(width, height, pixels);
+            BinaryBitmap binaryBitmap = new BinaryBitmap(new HybridBinarizer(source));
+            MultiFormatReader reader = new MultiFormatReader();
+            Result result = reader.decode(binaryBitmap);
+            if (result != null && result.getText() != null) {
+                boolean ok = processScannedQrPayload(result.getText());
+                if (!ok) {
+                    Toast.makeText(this, "QR Code di backup non valido.", Toast.LENGTH_LONG).show();
+                }
+            } else {
+                Toast.makeText(this, "Nessun QR Code trovato nell'immagine.", Toast.LENGTH_LONG).show();
+            }
+        } catch (com.google.zxing.NotFoundException nfe) {
+            Toast.makeText(this, "Nessun QR Code rilevato nell'immagine selezionata.", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Log.e(TAG, "Errore lettura QR da immagine", e);
+            Toast.makeText(this, "Errore lettura QR da immagine: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     private final ActivityResultLauncher<ScanOptions> barcodeLauncher = registerForActivityResult(new ScanContract(),
             result -> {
                 if (result.getContents() != null) {
-                    String scanned = result.getContents().trim();
-                    try {
-                        if (scanned.startsWith("apritisedano://rolling")) {
-                            Uri uri = Uri.parse(scanned);
-                            String seed = uri.getQueryParameter("seed");
-                            String idStr = uri.getQueryParameter("id");
-                            String cntStr = uri.getQueryParameter("cnt");
-                            String qrName = uri.getQueryParameter("name");
-                            String qrMac = uri.getQueryParameter("mac");
-
-                            String targetMac = (pendingQrTargetMac != null) ? pendingQrTargetMac : qrMac;
-                            String name = (pendingQrDeviceName != null && !pendingQrDeviceName.isEmpty())
-                                    ? pendingQrDeviceName
-                                    : (qrName != null && !qrName.isEmpty() ? qrName : "ApritiSedano");
-
-                            int clientId = (idStr != null) ? Integer.parseInt(idStr) : TOTPGenerator.generateRandomClientId();
-                            long counter = (cntStr != null) ? Long.parseLong(cntStr) : 0L;
-
-                            if (targetMac != null && TOTPGenerator.isValidBase32Secret(seed)) {
-                                Device restored = new Device(targetMac, name, seed, clientId, counter);
-                                DeviceManager.addDevice(this, restored);
-                                deviceList = DeviceManager.getDevices(this);
-                                deviceAdapter.updateDevices(deviceList);
-                                Toast.makeText(this, "Backup dispositivo importato con successo!", Toast.LENGTH_SHORT).show();
-                                return;
-                            }
-                        }
-                    } catch (Exception e) {
-                        Log.e(TAG, "Errore importazione QR", e);
+                    boolean ok = processScannedQrPayload(result.getContents());
+                    if (!ok) {
+                        Toast.makeText(this, "QR Code di backup non valido.", Toast.LENGTH_LONG).show();
                     }
-                    Toast.makeText(this, "QR Code di backup non valido.", Toast.LENGTH_LONG).show();
                 } else {
                     Toast.makeText(this, "Scansione annullata", Toast.LENGTH_SHORT).show();
                 }
@@ -1409,7 +1470,7 @@ public class MainActivity extends AppCompatActivity {
                         if (discoveryDialog != null && discoveryDialog.isShowing()) {
                             discoveryDialog.dismiss();
                         }
-                        showFinalDeviceConfigDialog(item.mac);
+                        showQrImportMethodChoiceDialog(item.mac, "ApritiSedano");
                     });
                 } else if (enrolled != null) {
                     cardView.setCardBackgroundColor(Color.parseColor("#F6FAFE"));
@@ -1439,12 +1500,7 @@ public class MainActivity extends AppCompatActivity {
                         if (discoveryDialog != null && discoveryDialog.isShowing()) {
                             discoveryDialog.dismiss();
                         }
-                        pendingQrTargetMac = item.mac;
-                        pendingQrDeviceName = "ApritiSedano";
-                        ScanOptions options = new ScanOptions();
-                        options.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
-                        options.setPrompt("Inquadra il QR Code di backup");
-                        barcodeLauncher.launch(options);
+                        showQrImportMethodChoiceDialog(item.mac, "ApritiSedano");
                     });
                 }
 
@@ -1647,6 +1703,34 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
+    private void showQrImportMethodChoiceDialog(String targetMac, String deviceName) {
+        pendingQrTargetMac = targetMac;
+        pendingQrDeviceName = (deviceName != null && !deviceName.isEmpty()) ? deviceName : "ApritiSedano";
+
+        View view = getLayoutInflater().inflate(R.layout.sheet_qr_import_choice, null);
+        BottomSheetDialog sheet = createModernBottomSheet(view);
+
+        view.findViewById(R.id.card_qr_scan_camera).setOnClickListener(v -> {
+            sheet.dismiss();
+            ScanOptions options = new ScanOptions();
+            options.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
+            options.setPrompt("Inquadra il QR Code di backup");
+            barcodeLauncher.launch(options);
+        });
+
+        view.findViewById(R.id.card_qr_pick_image).setOnClickListener(v -> {
+            sheet.dismiss();
+            qrImagePickerLauncher.launch(new String[]{"image/*"});
+        });
+
+        View btnCancel = view.findViewById(R.id.btn_cancel_qr_sheet);
+        if (btnCancel != null) {
+            btnCancel.setOnClickListener(v -> sheet.dismiss());
+        }
+
+        sheet.show();
+    }
+
     private void showFinalDeviceConfigDialog(String macAddress) {
         View view = getLayoutInflater().inflate(R.layout.dialog_ble_pair_config, null);
         BottomSheetDialog sheet = createModernBottomSheet(view);
@@ -1673,13 +1757,9 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnImportQr.setOnClickListener(v -> {
-            pendingQrTargetMac = macAddress;
-            pendingQrDeviceName = etName.getText() != null ? etName.getText().toString().trim() : "";
+            String curName = etName.getText() != null ? etName.getText().toString().trim() : "";
             sheet.dismiss();
-            ScanOptions options = new ScanOptions();
-            options.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
-            options.setPrompt("Inquadra il QR Code di backup");
-            barcodeLauncher.launch(options);
+            showQrImportMethodChoiceDialog(macAddress, curName);
         });
 
         btnConfirm.setOnClickListener(v -> {
