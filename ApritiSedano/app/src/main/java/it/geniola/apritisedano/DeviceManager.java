@@ -118,6 +118,26 @@ public class DeviceManager {
     }
 
     /**
+     * Updates the persisted Antenna state of a device only if it actually changed.
+     * @return true if the value changed and was persisted, false otherwise.
+     */
+    public static synchronized boolean updateAntennaState(Context context, String macAddress, int antennaState) {
+        if (macAddress == null) return false;
+        List<Device> devices = getDevices(context);
+        for (Device d : devices) {
+            if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
+                if (d.getAntennaState() != antennaState) {
+                    d.setAntennaState(antennaState);
+                    saveDevices(context, devices);
+                    return true;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Checks if this smartphone is configured as Master for at least one registered device.
      */
     public static synchronized boolean hasMasterDevice(Context context) {

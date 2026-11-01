@@ -279,7 +279,7 @@ public class ApritiSedanoService extends Service {
             if (payload == null || payload.length == 0) return;
 
             // Ignora i beacon di stato continui (0x01 = Normal, 0x04 = Pairing Mode, 0x05 = OTA Wait)
-            if ((payload.length == 6 || payload.length == 10) &&
+            if (payload.length <= 15 &&
                 (payload[0] == 0x01 || payload[0] == 0x04 || payload[0] == 0x05)) {
                 return;
             }

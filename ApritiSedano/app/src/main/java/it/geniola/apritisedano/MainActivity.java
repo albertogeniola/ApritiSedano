@@ -756,8 +756,14 @@ public class MainActivity extends AppCompatActivity {
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         String roleSuffix = currentDevice.isMaster() ? " [MASTER]" : "";
-        builder.setTitle(String.format(Locale.US, "%s%s (ID: 0x%04X, Cnt: %d)",
-                currentDevice.getName(), roleSuffix, currentDevice.getClientId(), currentDevice.getCounter()));
+        String antSuffix = "";
+        if (currentDevice.getAntennaState() == 0) {
+            antSuffix = " • 📶 Ant: Interna";
+        } else if (currentDevice.getAntennaState() == 1) {
+            antSuffix = " • 📡 Ant: Esterna";
+        }
+        builder.setTitle(String.format(Locale.US, "%s%s (ID: 0x%04X, Cnt: %d)%s",
+                currentDevice.getName(), roleSuffix, currentDevice.getClientId(), currentDevice.getCounter(), antSuffix));
 
         CharSequence[] options = optionList.toArray(new CharSequence[0]);
         builder.setItems(options, (dialog, which) -> {
@@ -1351,6 +1357,15 @@ public class MainActivity extends AppCompatActivity {
             dev.setMaster(isMaster);
             DeviceManager.updateMasterStatus(this, mac, isMaster);
             deviceAdapter.updateDeviceMasterStatus(mac, isMaster);
+        }
+
+        if (payload.length >= 11) {
+            int antState = payload[10] & 0xFF;
+            if (dev.getAntennaState() != antState) {
+                dev.setAntennaState(antState);
+                DeviceManager.updateAntennaState(this, mac, antState);
+                deviceAdapter.updateDeviceAntennaStatus(mac, antState);
+            }
         }
     }
 

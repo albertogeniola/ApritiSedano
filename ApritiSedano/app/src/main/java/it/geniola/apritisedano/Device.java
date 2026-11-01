@@ -10,6 +10,7 @@ public class Device {
     private int clientId;     // 16-bit identifier registered with the MCU (1..65534)
     private long counter;     // Monotonically increasing rolling code counter
     private boolean isMaster; // True if the MCU beacon identifies this smartphone's seed as Master OTA
+    private int antennaState = -1; // -1: Sconosciuto/Non supportato, 0: Interna, 1: Esterna
 
     // UI State (Not persisted)
     private int currentState = -1; // -1: Unknown, 1: Open, 2: Closed, 5: Pairing Mode
@@ -78,6 +79,14 @@ public class Device {
         isMaster = master;
     }
 
+    public int getAntennaState() {
+        return antennaState;
+    }
+
+    public void setAntennaState(int antennaState) {
+        this.antennaState = antennaState;
+    }
+
     public int getCurrentState() {
         return currentState;
     }
@@ -129,6 +138,7 @@ public class Device {
         json.put("clientId", clientId);
         json.put("counter", counter);
         json.put("isMaster", isMaster);
+        json.put("antennaState", antennaState);
         return json;
     }
 
@@ -142,6 +152,8 @@ public class Device {
         }
         long counter = json.optLong("counter", 0L);
         boolean isMaster = json.optBoolean("isMaster", false);
-        return new Device(mac, name, secret, clientId, counter, isMaster);
+        Device dev = new Device(mac, name, secret, clientId, counter, isMaster);
+        dev.setAntennaState(json.optInt("antennaState", -1));
+        return dev;
     }
 }

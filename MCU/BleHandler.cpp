@@ -425,10 +425,14 @@ void BleHandler::updateStateBeacon() {
     // Tag crittografico a 32 bit per consentire solo alla Master App di mostrare la voce OTA nel menu
     uint32_t masterTag = RollingCodeManager::computeMasterTag(_ownMac);
 
-    // Payload su stack (14 byte totali <= 31B limite BLE Scan Response):
-    // [Len: 1B] [0xFF] [0xE5 0x02] [Type: 1B] [State: 1B] [Timestamp/RemSec: 4B BE] [MasterTag: 4B BE]
-    char rawAdData[14];
-    rawAdData[0]  = (char)13;   // Length = 1 (0xFF) + 2 (Company ID) + 10 (payload)
+    // Stato Antenna attuale (0 = Interna, 1 = Esterna, 2 = Non supportata)
+    uint8_t antByte = (AntennaManager::getState() == ANTENNA_EXTERNAL) ? 0x01 :
+                      ((AntennaManager::getState() == ANTENNA_INTERNAL) ? 0x00 : 0x02);
+
+    // Payload su stack (15 byte totali <= 31B limite BLE Scan Response):
+    // [Len: 1B] [0xFF] [0xE5 0x02] [Type: 1B] [State: 1B] [Timestamp/RemSec: 4B BE] [MasterTag: 4B BE] [Antenna: 1B]
+    char rawAdData[15];
+    rawAdData[0]  = (char)14;   // Length = 1 (0xFF) + 2 (Company ID) + 11 (payload)
     rawAdData[1]  = (char)0xFF; // Manufacturer Specific Data
     rawAdData[2]  = (char)0xE5; // Company ID Low
     rawAdData[3]  = (char)0x02; // Company ID High
@@ -442,6 +446,7 @@ void BleHandler::updateStateBeacon() {
     rawAdData[11] = (char)((masterTag >> 16) & 0xFF);
     rawAdData[12] = (char)((masterTag >> 8) & 0xFF);
     rawAdData[13] = (char)(masterTag & 0xFF);
+    rawAdData[14] = (char)antByte;
 
     oScanResponseData.addData(rawAdData, sizeof(rawAdData));
     pAdvertising->setScanResponseData(oScanResponseData);

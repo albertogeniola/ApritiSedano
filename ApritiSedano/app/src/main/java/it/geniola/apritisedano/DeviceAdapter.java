@@ -63,6 +63,20 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
         }
     }
 
+    public void updateDeviceAntennaStatus(String macAddress, int antennaState) {
+        if (macAddress == null || deviceList == null) return;
+        for (int i = 0; i < deviceList.size(); i++) {
+            Device d = deviceList.get(i);
+            if (d.getMacAddress().equalsIgnoreCase(macAddress)) {
+                if (d.getAntennaState() != antennaState) {
+                    d.setAntennaState(antennaState);
+                    notifyItemChanged(i);
+                }
+                return;
+            }
+        }
+    }
+
     public void updateDeviceState(String macAddress, int state) {
         for (int i = 0; i < deviceList.size(); i++) {
             Device d = deviceList.get(i);
@@ -123,6 +137,20 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
         holder.tvDeviceName.setText(device.getName());
         holder.tvDeviceMac.setText(device.getMacAddress());
 
+        if (device.getAntennaState() == 0) {
+            holder.tvAntennaBadge.setVisibility(View.VISIBLE);
+            holder.tvAntennaBadge.setText("📶 Interna");
+            holder.tvAntennaBadge.setBackgroundResource(R.drawable.badge_antenna_internal);
+            holder.tvAntennaBadge.setTextColor(Color.parseColor("#1565C0"));
+        } else if (device.getAntennaState() == 1) {
+            holder.tvAntennaBadge.setVisibility(View.VISIBLE);
+            holder.tvAntennaBadge.setText("📡 Esterna");
+            holder.tvAntennaBadge.setBackgroundResource(R.drawable.badge_antenna_external);
+            holder.tvAntennaBadge.setTextColor(Color.parseColor("#E65100"));
+        } else {
+            holder.tvAntennaBadge.setVisibility(View.GONE);
+        }
+
         if (device.getCurrentState() == 1) {
             holder.tvDeviceState.setText("Stato: APERTO");
             holder.tvDeviceState.setTextColor(Color.parseColor("#4CAF50"));
@@ -171,6 +199,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
     static class DeviceViewHolder extends RecyclerView.ViewHolder {
         TextView tvDeviceName;
         TextView tvDeviceMac;
+        TextView tvAntennaBadge;
         TextView tvDeviceState;
         Button btnAction;
         ImageView ivSettings;
@@ -179,6 +208,7 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.DeviceView
             super(itemView);
             tvDeviceName = itemView.findViewById(R.id.tv_device_name);
             tvDeviceMac = itemView.findViewById(R.id.tv_device_mac);
+            tvAntennaBadge = itemView.findViewById(R.id.tv_antenna_badge);
             tvDeviceState = itemView.findViewById(R.id.tv_device_state);
             btnAction = itemView.findViewById(R.id.btn_action);
             ivSettings = itemView.findViewById(R.id.iv_settings);

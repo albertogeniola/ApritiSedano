@@ -41,13 +41,35 @@
                     android:textStyle="bold"
                     android:textColor="?android:attr/textColorPrimary" />
 
-                <TextView
-                    android:id="@+id/tv_device_mac"
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="AA:BB:CC:DD:EE:FF"
-                    android:textSize="12sp"
-                    android:textColor="?android:attr/textColorSecondary" />
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="2dp">
+
+                    <TextView
+                        android:id="@+id/tv_device_mac"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="AA:BB:CC:DD:EE:FF"
+                        android:textSize="12sp"
+                        android:textColor="?android:attr/textColorSecondary" />
+
+                    <TextView
+                        android:id="@+id/tv_antenna_badge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="1dp"
+                        android:paddingBottom="1dp"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"
+                        android:text="📶 Interna" />
+                </LinearLayout>
             </LinearLayout>
 
             <ImageView
