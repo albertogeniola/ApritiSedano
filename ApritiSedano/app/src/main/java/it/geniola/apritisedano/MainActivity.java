@@ -1470,7 +1470,7 @@ public class MainActivity extends AppCompatActivity {
                         if (discoveryDialog != null && discoveryDialog.isShowing()) {
                             discoveryDialog.dismiss();
                         }
-                        showQrImportMethodChoiceDialog(item.mac, "ApritiSedano");
+                        showFinalDeviceConfigDialog(item.mac);
                     });
                 } else if (enrolled != null) {
                     cardView.setCardBackgroundColor(Color.parseColor("#F6FAFE"));
