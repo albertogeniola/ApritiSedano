@@ -60,7 +60,7 @@
     #define HW_SUPPORTS_EXTERNAL_ANTENNA true
     #define HW_FORCE_EXTERNAL_ANTENNA    false
     #define HW_FORCE_INTERNAL_ANTENNA    false
-    #define HW_DEFAULT_EXTERNAL_ANTENNA  true        // true = default Antenna Esterna (U.FL), preserva lo switch utente in NVS
+    #define HW_DEFAULT_EXTERNAL_ANTENNA  false       // false = default Interna (Ceramica), preserva lo switch utente in NVS
     #define HW_ANT_ENABLE_PIN            3           // GPIO 3 (WIFI_ENABLE: LOW = RF switch alimentato)
     #ifndef D14
     #define D14 14
